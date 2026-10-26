@@ -27,8 +27,8 @@ test("usage is logged in development, and in production only when asked", () => 
 
 test("Ask uses the dive role's provider and model unless told otherwise", () => {
   assert.deepEqual(roleConfig("ASK", {}), roleConfig("DIVE", {}));
-  const env = { DIVE_PROVIDER: "muse-spark", DIVE_MODEL: "m1" };
-  assert.equal(roleConfig("ASK", env).provider, "muse-spark");
+  const env = { DIVE_PROVIDER: "meta", DIVE_MODEL: "m1" };
+  assert.equal(roleConfig("ASK", env).provider, "meta");
   assert.equal(roleConfig("ASK", env).model, "m1");
   assert.equal(roleConfig("ASK", { ...env, ASK_PROVIDER: "openai", ASK_MODEL: "m2" }).provider, "openai");
   assert.equal(roleConfig("ASK", { ...env, ASK_MAX_TOKENS: "600" }).maxTokens, 600);
@@ -39,4 +39,19 @@ test("withSystemSuffix appends the suffix for providers that can't take it apart
   assert.deepEqual(withSystemSuffix({}, { system: "S", systemSuffix: "X", messages: [] }), { system: "S\n\nX", messages: [] });
   assert.deepEqual(withSystemSuffix({ supportsSystemSuffix: true }, { system: "S", systemSuffix: "X" }), { system: "S", systemSuffix: "X" });
   assert.deepEqual(withSystemSuffix({}, { system: "S", systemSuffix: "" }), { system: "S" });
+});
+
+test("a missing key fails that role's requests, not the server's start", async () => {
+  const { createDiveModels } = await import("./models.js");
+  const prev = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    const models = createDiveModels();
+    const fromSettings = models.withSettings({ provider: "anthropic", model: "claude-sonnet-5" });
+    await assert.rejects(() => fromSettings.quickAnswer({ system: "S", prompt: "x" }), /No Claude API key/);
+    assert.equal(models.withSettings(null).quickAnswer, models.quickAnswer);
+    assert.equal(models.withSettings({ provider: "anthropic", model: "claude-sonnet-5" }), fromSettings); // reused
+  } finally {
+    if (prev !== undefined) process.env.ANTHROPIC_API_KEY = prev;
+  }
 });

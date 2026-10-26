@@ -1,4 +1,5 @@
 import type { ReferenceLookup } from "../glossary/types";
+import { aiRequestHeaders } from "../settings/aiSettings.ts";
 
 export interface DiveMessage {
   role: "user" | "assistant";
@@ -30,7 +31,7 @@ async function postSse(
 ): Promise<string> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await aiRequestHeaders()) },
     body: JSON.stringify(body),
     signal,
   });
@@ -119,7 +120,7 @@ export async function fetchGlossaryReference(term: string, signal?: AbortSignal)
 export async function quickMeaning(params: { system: string; prompt: string }): Promise<string> {
   const res = await fetch(`${API_BASE}/api/dive/quick`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await aiRequestHeaders()) },
     body: JSON.stringify(params),
   });
   const data = await res.json();

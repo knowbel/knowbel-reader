@@ -4,8 +4,8 @@ import { createProvider } from "./providers/index.js";
 // e.g. dive on Claude for quality, quick meanings on a cheaper/faster
 // model. Set DIVE_PROVIDER/DIVE_MODEL and QUICK_PROVIDER/QUICK_MODEL in
 // .env per role. Supported providers: anthropic, openai, google,
-// muse-spark (see ./providers/index.js). With nothing set, every role uses
-// the Muse Spark API (MUSE_SPARK_API_KEY); the glossary role runs it at low
+// meta (see ./providers/index.js). With nothing set, every role uses Muse
+// Spark through Meta's API (META_API_KEY); the glossary role runs it at low
 // reasoning effort since it must answer in real time.
 //
 // maxTokens caps each role's reply (override with {ROLE}_MAX_TOKENS). The
@@ -13,9 +13,9 @@ import { createProvider } from "./providers/index.js";
 // short — prompts do that. They leave room for a reasoning model's hidden
 // reasoning, which most providers count against the same cap.
 const ROLE_DEFAULTS = {
-  DIVE: { provider: "muse-spark", model: "muse-spark-1.3-contributor", maxTokens: 1024 },
-  QUICK: { provider: "muse-spark", model: "muse-spark-1.3-contributor", maxTokens: 512 },
-  GLOSSARY: { provider: "muse-spark", model: "muse-spark-1.3-contributor", reasoningEffort: "low", maxTokens: 1024 },
+  DIVE: { provider: "meta", model: "muse-spark-1.3-contributor", maxTokens: 1024 },
+  QUICK: { provider: "meta", model: "muse-spark-1.3-contributor", maxTokens: 512 },
+  GLOSSARY: { provider: "meta", model: "muse-spark-1.3-contributor", reasoningEffort: "low", maxTokens: 1024 },
 };
 
 // Ask (whole-document questions) answers like a dive does, so unless
@@ -35,9 +35,21 @@ export function roleConfig(role, env = process.env) {
   };
 }
 
-function roleProvider(role) {
-  const { provider, ...options } = roleConfig(role);
-  return createProvider(provider, options);
+// The provider and model for one role: from .env, or — when the reader chose
+// them in the app's AI settings (sent with each request, see ./app.js) —
+// their main model for dives and Ask, their fast model for quick meanings
+// and the glossary. The role's reasoning effort and output cap apply either
+// way.
+const FAST_ROLES = new Set(["QUICK", "GLOSSARY"]);
+
+function roleProvider(role, settings) {
+  const { provider, model, ...options } = roleConfig(role);
+  if (!settings) return createProvider(provider, { model, ...options });
+  return createProvider(settings.provider, {
+    ...options,
+    model: FAST_ROLES.has(role) ? settings.fastModel || settings.model : settings.model,
+    apiKey: settings.apiKey,
+  });
 }
 
 // One line per model call with its token counts — how the context budgets
@@ -58,14 +70,12 @@ export function withSystemSuffix(provider, { system, systemSuffix, ...rest }) {
   return provider.supportsSystemSuffix ? { system, systemSuffix, ...rest } : { system: `${system}\n\n${systemSuffix}`, ...rest };
 }
 
-export function createDiveModels() {
-  const dive = roleProvider("DIVE");
-  const quick = roleProvider("QUICK");
-  // Built on first use rather than at startup: its default provider needs
-  // MUSE_SPARK_API_KEY, and a missing key should fail glossary requests
-  // (with that error), not stop the server from starting for dives.
-  let glossary = null;
-  const ask = roleProvider("ASK");
+// Each role's provider is built on first use rather than at startup, so a
+// missing key fails that role's requests (with that error) instead of
+// stopping the server from starting — a release build has no .env at all.
+function roleModels(settings) {
+  const providers = {};
+  const provider = (role) => (providers[role] ??= roleProvider(role, settings));
   const onUsage = {
     dive: usageLogger("dive"),
     ask: usageLogger("ask"),
@@ -73,12 +83,36 @@ export function createDiveModels() {
     glossary: usageLogger("glossary"),
   };
   return {
-    streamDiveReply: (args) => dive.streamReply({ ...withSystemSuffix(dive, args), onUsage: onUsage.dive }),
-    streamAskReply: (args) => ask.streamReply({ ...args, onUsage: onUsage.ask }),
-    quickAnswer: (args) => quick.complete({ ...args, onUsage: onUsage.quick }),
-    streamGlossary: (args) => {
-      glossary ??= roleProvider("GLOSSARY");
-      return glossary.streamReply({ ...args, onUsage: onUsage.glossary });
+    streamDiveReply: async (args) => {
+      const dive = provider("DIVE");
+      return dive.streamReply({ ...withSystemSuffix(dive, args), onUsage: onUsage.dive });
+    },
+    streamAskReply: async (args) => provider("ASK").streamReply({ ...args, onUsage: onUsage.ask }),
+    quickAnswer: async (args) => provider("QUICK").complete({ ...args, onUsage: onUsage.quick }),
+    streamGlossary: async (args) => provider("GLOSSARY").streamReply({ ...args, onUsage: onUsage.glossary }),
+  };
+}
+
+// The .env configuration, plus `withSettings` for a request that carries the
+// reader's own provider, key and models. Those are kept for reuse (a key
+// typically stays the same for the whole session), a handful at most.
+const MAX_SETTINGS_CACHED = 8;
+
+export function createDiveModels() {
+  const fromEnv = roleModels(null);
+  const cached = new Map();
+  return {
+    ...fromEnv,
+    withSettings(settings) {
+      if (!settings) return fromEnv;
+      const id = JSON.stringify([settings.provider, settings.apiKey, settings.model, settings.fastModel]);
+      let models = cached.get(id);
+      if (!models) {
+        if (cached.size >= MAX_SETTINGS_CACHED) cached.clear();
+        models = roleModels(settings);
+        cached.set(id, models);
+      }
+      return models;
     },
   };
 }

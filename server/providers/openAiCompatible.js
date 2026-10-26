@@ -67,9 +67,9 @@ function wrapError(err, label, timeoutMs) {
 }
 
 // Wraps any Chat Completions-compatible backend via the official `openai`
-// SDK — real OpenAI, or a third-party host (Meta's Muse Spark, Groq,
+// SDK — real OpenAI, or a third-party host (Meta, Groq,
 // Together, ...) that speaks the same API. Only baseURL/apiKey/model/label
-// differ between them; see ./openai.js and ./museSpark.js.
+// differ between them; see ./openai.js and ./meta.js.
 export function createOpenAiCompatibleProvider({
   apiKey,
   baseURL,

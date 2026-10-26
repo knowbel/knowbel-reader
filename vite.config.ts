@@ -31,7 +31,9 @@ export default defineConfig({
   plugins: [react(), noScriptsSniffedAsPdf()],
   server: {
     proxy: {
-      '/api': 'http://localhost:4300',
+      // 127.0.0.1, not localhost: the API server listens on IPv4 loopback
+      // only (server/index.js), and localhost can resolve to ::1 first.
+      '/api': 'http://127.0.0.1:4300',
     },
   },
   // pdf.js's worker setup does its own dynamic `import()` of the worker

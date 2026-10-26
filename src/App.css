@@ -4214,6 +4214,70 @@
   cursor: default;
 }
 
+/* ---- Settings (src/settings) — on the url-dialog styles above ------------- */
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.settings-saved-key {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.settings-saved-key span {
+  flex: 1;
+}
+
+.settings-saved-key .url-dialog-button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+}
+
+.settings-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-link:hover {
+  text-decoration: underline;
+}
+
+.settings-models {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.86rem;
+}
+
+.settings-models summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.settings-models[open] summary {
+  margin-bottom: 0.6rem;
+}
+
+.settings-models .settings-field + .settings-field,
+.settings-models .settings-field + .url-dialog-hint {
+  margin-top: 0.6rem;
+}
+
 @media (max-width: 720px) {
   .library-header {
     flex-wrap: wrap;

@@ -32,16 +32,41 @@ test("google requires GOOGLE_API_KEY", () => {
   }
 });
 
-test("muse-spark requires MUSE_SPARK_API_KEY", () => {
-  const prev = process.env.MUSE_SPARK_API_KEY;
+test("meta requires META_API_KEY", () => {
+  const prev = { META_API_KEY: process.env.META_API_KEY, MUSE_SPARK_API_KEY: process.env.MUSE_SPARK_API_KEY };
+  delete process.env.META_API_KEY;
   delete process.env.MUSE_SPARK_API_KEY;
   try {
-    assert.throws(() => createProvider("muse-spark", { model: "muse-spark-1.3" }), /MUSE_SPARK_API_KEY/);
+    assert.throws(() => createProvider("meta", { model: "muse-spark-1.3" }), /META_API_KEY/);
   } finally {
-    if (prev !== undefined) process.env.MUSE_SPARK_API_KEY = prev;
+    for (const [name, value] of Object.entries(prev)) if (value !== undefined) process.env[name] = value;
+  }
+});
+
+test("meta's old name and key variable from when it was muse-spark still work", () => {
+  const prev = { META_API_KEY: process.env.META_API_KEY, MUSE_SPARK_API_KEY: process.env.MUSE_SPARK_API_KEY };
+  delete process.env.META_API_KEY;
+  process.env.MUSE_SPARK_API_KEY = "legacy-key";
+  try {
+    assert.equal(typeof createProvider("muse-spark", { model: "muse-spark-1.3" }).complete, "function");
+    assert.equal(typeof createProvider("meta", { model: "muse-wonder" }).complete, "function");
+  } finally {
+    delete process.env.MUSE_SPARK_API_KEY;
+    for (const [name, value] of Object.entries(prev)) if (value !== undefined) process.env[name] = value;
   }
 });
 
 test("an unknown provider name throws a clear error", () => {
   assert.throws(() => createProvider("bogus", { model: "x" }), /Unknown provider "bogus"/);
+});
+
+test("a key from the app's AI settings is used in place of the .env one", () => {
+  const prev = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    assert.equal(typeof createProvider("anthropic", { model: "claude-sonnet-5", apiKey: "sk-ant-test" }).streamReply, "function");
+    assert.throws(() => createProvider("anthropic", { model: "claude-sonnet-5" }), /Add one in Settings/);
+  } finally {
+    if (prev !== undefined) process.env.ANTHROPIC_API_KEY = prev;
+  }
 });

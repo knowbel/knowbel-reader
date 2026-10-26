@@ -104,26 +104,37 @@ npm run dev
 
 ## Configure API keys
 
-All model settings live in `.env` in this directory. The file is git-ignored,
-so keys stay local. Start from `.env.example`.
+In the desktop app, open **Settings** (the gear in the library) and pick a
+provider and paste your API key. The key is kept in your system keychain
+(Keychain on macOS) and sent with each AI request to the app's local server,
+so it never has to be built into the app. You can also change the models
+there. Usage is billed to your own account with that provider.
 
-With nothing else set, every feature uses Meta's Muse Spark API
-(`muse-spark-1.3-contributor`), so the minimum setup is one line:
+Otherwise, model settings live in `.env` in this directory. The file is git-ignored,
+so keys stay local. Start from `.env.example`. The browser version always
+reads its keys from `.env`. The desktop app uses `.env` until you save
+Settings for the first time; after that, a provider with no key in Settings
+still falls back to its `.env` key.
+
+With nothing else set, every feature uses Muse Spark
+(`muse-spark-1.3-contributor`) through Meta's API, so the minimum setup is
+one line, with a key from <https://dev.meta.ai/api-keys>:
 
 ```bash
-MUSE_SPARK_API_KEY=your-key-here
+META_API_KEY=your-key-here
 ```
 
 ### Providers
 
-| Provider     | Key in `.env`        | Notes                                        |
-| ------------ | -------------------- | -------------------------------------------- |
-| `muse-spark` | `MUSE_SPARK_API_KEY` | Default. Meta's Muse Spark, via the OpenAI SDK |
-| `anthropic`  | `ANTHROPIC_API_KEY`  | Claude API                                   |
-| `openai`     | `OPENAI_API_KEY`     | OpenAI API                                   |
-| `google`     | `GOOGLE_API_KEY`     | Gemini API                                   |
+| Provider    | Key in `.env`       | Notes                                        |
+| ----------- | ------------------- | -------------------------------------------- |
+| `meta`      | `META_API_KEY`      | Default. Meta's models (Muse Spark, Muse Wonder, ...), via the OpenAI SDK |
+| `anthropic` | `ANTHROPIC_API_KEY` | Claude API                                   |
+| `openai`    | `OPENAI_API_KEY`    | OpenAI API                                   |
+| `google`    | `GOOGLE_API_KEY`    | Gemini API                                   |
 
-You only need keys for the providers you actually use.
+You only need keys for the providers you actually use. The `meta` provider was
+called `muse-spark`, with `MUSE_SPARK_API_KEY`; both old names still work.
 
 ### Choosing a provider per feature
 
@@ -132,19 +143,19 @@ and model through `<ROLE>_PROVIDER` and `<ROLE>_MODEL`:
 
 | Role       | Used by                                      | Default                                      |
 | ---------- | -------------------------------------------- | -------------------------------------------- |
-| `DIVE`     | Deep Dive                                    | `muse-spark` · `muse-spark-1.3-contributor`  |
+| `DIVE`     | Deep Dive                                    | `meta` · `muse-spark-1.3-contributor`        |
 | `ASK`      | Ask                                          | Whatever `DIVE` uses                         |
-| `GLOSSARY` | Glossary definitions and notation lookups    | `muse-spark` · `muse-spark-1.3-contributor`, low reasoning effort |
-| `QUICK`    | Short one-shot answers (`/api/dive/quick`) and the grounding eval's `--judge` | `muse-spark` · `muse-spark-1.3-contributor` |
+| `GLOSSARY` | Glossary definitions and notation lookups    | `meta` · `muse-spark-1.3-contributor`, low reasoning effort |
+| `QUICK`    | Short one-shot answers (`/api/dive/quick`) and the grounding eval's `--judge` | `meta` · `muse-spark-1.3-contributor` |
 
 For example, to run Deep Dive and Ask on Claude while keeping the glossary on
-Muse Spark:
+Meta's Muse Spark:
 
 ```bash
 DIVE_PROVIDER=anthropic
 DIVE_MODEL=claude-sonnet-5
 ANTHROPIC_API_KEY=sk-ant-...
-MUSE_SPARK_API_KEY=...
+META_API_KEY=...
 ```
 
 Restart `npm run dev` after editing `.env`.
@@ -156,6 +167,7 @@ Restart `npm run dev` after editing `.env`.
 | `<ROLE>_MAX_TOKENS`   | Cap on a role's reply length (defaults: DIVE 1024, QUICK 512, GLOSSARY 1024) |
 | `REFERENCE_CONTACT`   | Your email or URL, sent to Wikimedia with glossary lookups. Raises their rate limit from 10 to 200 requests a minute |
 | `PORT`                | API server port (default 4300)                                |
+| `HOST`                | Address the API server listens on (default `127.0.0.1`, this machine only). `0.0.0.0` opens it to your network, and anyone who can reach it can spend the keys in `.env` |
 | `LOG_USAGE=1`         | Log token usage per model call in production (always on in development) |
 
 ## Desktop app
@@ -172,7 +184,9 @@ How the packaged app differs from the browser version:
 - **It reads `.env` at build time.** `npm run tauri build` copies your `.env`
   into the bundle. Rebuild after changing keys or providers. Because your keys
   ship inside the bundle, don't distribute a build made with your personal
-  `.env`.
+  `.env`. For a build to share, leave `.env` out (and delete any copy left
+  in `src-tauri/resources/` by an earlier build), and each user adds their
+  own key in Settings.
 - **It stores data as plain files.** Your library and notes go in the app data
   folder (on macOS, `~/Library/Application Support/com.knowbelreader.app/library/`),
   one folder per document. The browser version uses IndexedDB instead.
@@ -218,7 +232,7 @@ Each provider in `server/providers/` exposes the same small interface
 (`streamReply` and `complete`) and is registered in
 `server/providers/index.js`. Any service that speaks the OpenAI Chat
 Completions API (Groq, Together, Fireworks, and so on) can be added the way
-`museSpark.js` wraps `openAiCompatible.js` with its own base URL.
+`meta.js` wraps `openAiCompatible.js` with its own base URL.
 
 ## Built with
 

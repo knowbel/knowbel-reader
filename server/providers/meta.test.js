@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createMuseSparkProvider } from "./museSpark.js";
+import { createMetaProvider } from "./meta.js";
 
-test("points the OpenAI SDK at Meta's Muse Spark endpoint", async () => {
+test("points the OpenAI SDK at Meta's endpoint", async () => {
   const capture = {};
-  const provider = createMuseSparkProvider({
-    apiKey: "muse-key",
+  const provider = createMetaProvider({
+    apiKey: "meta-key",
     model: "muse-spark-1.3",
     createClient: (cfg) => {
       capture.cfg = cfg;
@@ -21,7 +21,7 @@ test("points the OpenAI SDK at Meta's Muse Spark endpoint", async () => {
       };
     },
   });
-  assert.deepEqual(capture.cfg, { apiKey: "muse-key", baseURL: "https://api.meta.ai/v1" });
+  assert.deepEqual(capture.cfg, { apiKey: "meta-key", baseURL: "https://api.meta.ai/v1" });
 
   const out = await provider.complete({ system: "S", prompt: "hi" });
   assert.equal(out, "ok");
@@ -29,8 +29,8 @@ test("points the OpenAI SDK at Meta's Muse Spark endpoint", async () => {
   assert.equal(capture.params.reasoning_effort, "medium");
 });
 
-test("uses the Muse Spark API error label", async () => {
-  const provider = createMuseSparkProvider({
+test("uses the Meta API error label", async () => {
+  const provider = createMetaProvider({
     apiKey: "bad-key",
     model: "muse-spark-1.3",
     createClient: () => ({
@@ -45,14 +45,14 @@ test("uses the Muse Spark API error label", async () => {
   });
   await assert.rejects(
     () => provider.complete({ system: "S", prompt: "x" }),
-    /Muse Spark API error 401: invalid key/
+    /Meta API error 401: invalid key/
   );
 });
 
 test("a role can override the reasoning effort", async () => {
   const capture = {};
-  const provider = createMuseSparkProvider({
-    apiKey: "muse-key",
+  const provider = createMetaProvider({
+    apiKey: "meta-key",
     model: "muse-spark-1.3",
     reasoningEffort: "low",
     createClient: () => ({

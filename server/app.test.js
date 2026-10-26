@@ -192,7 +192,7 @@ test("POST /api/glossary/stream sends an error frame when the model rejects", as
   const failingModels = {
     ...fakeModels,
     async streamGlossary() {
-      throw new Error("MUSE_SPARK_API_KEY is not set.");
+      throw new Error("META_API_KEY is not set.");
     },
   };
   await withServer(failingModels, async (base) => {
@@ -201,7 +201,7 @@ test("POST /api/glossary/stream sends an error frame when the model rejects", as
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ system: "S", prompt: "x" }),
     });
-    assert.deepEqual(parseSSE(await res.text()), [{ error: "MUSE_SPARK_API_KEY is not set." }]);
+    assert.deepEqual(parseSSE(await res.text()), [{ error: "META_API_KEY is not set." }]);
   });
 });
 
@@ -292,4 +292,37 @@ test("POST /api/dive/stream passes a systemSuffix through and counts it toward t
   assert.equal(calls.length, 2);
   assert.equal(calls[0].systemSuffix, "More sources");
   assert.equal("systemSuffix" in calls[1], false);
+});
+
+test("AI settings headers pick the models a request uses", async () => {
+  const seen = [];
+  const models = {
+    ...fakeModels,
+    withSettings(settings) {
+      seen.push(settings);
+      return { ...fakeModels, quickAnswer: async () => `from ${settings.provider}` };
+    },
+  };
+  await withServer(models, async (base) => {
+    const post = (headers) =>
+      fetch(`${base}/api/dive/quick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify({ system: "S", prompt: "P" }),
+      }).then((res) => res.json());
+    assert.deepEqual(await post({}), { answer: "Quick answer." });
+    assert.deepEqual(
+      await post({ "X-AI-Provider": "openai", "X-AI-Key": "sk-test", "X-AI-Model": "gpt-5", "X-AI-Fast-Model": "gpt-5-mini" }),
+      { answer: "from openai" },
+    );
+    assert.deepEqual(seen, [{ provider: "openai", apiKey: "sk-test", model: "gpt-5", fastModel: "gpt-5-mini" }]);
+  });
+});
+
+test("the desktop app's preflight allows the AI settings headers", async () => {
+  await withServer(fakeModels, async (base) => {
+    const res = await fetch(`${base}/api/dive/stream`, { method: "OPTIONS", headers: { Origin: "tauri://localhost" } });
+    assert.equal(res.status, 204);
+    assert.match(res.headers.get("access-control-allow-headers"), /X-AI-Key/);
+  });
 });

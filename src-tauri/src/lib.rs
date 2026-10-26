@@ -37,6 +37,47 @@ fn spawn_server(resource_path: &std::path::Path) -> std::io::Result<Child> {
     .spawn()
 }
 
+// The reader's own model API keys (Settings → AI), one Keychain item per
+// provider on macOS (Credential Manager on Windows, Secret Service on Linux).
+// The frontend reads a key back to send it with each AI request to the
+// local server (src/settings/aiSettings.ts), so a build never has to carry
+// one.
+const KEYCHAIN_SERVICE: &str = "com.knowbelreader.app";
+const KEY_PROVIDERS: [&str; 4] = ["meta", "anthropic", "openai", "google"];
+
+fn key_entry(provider: &str) -> Result<keyring::Entry, String> {
+  if !KEY_PROVIDERS.contains(&provider) {
+    return Err(format!("Unknown provider \"{provider}\"."));
+  }
+  keyring::Entry::new(KEYCHAIN_SERVICE, provider).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn get_api_key(provider: String) -> Result<Option<String>, String> {
+  match key_entry(&provider)?.get_password() {
+    Ok(key) => Ok(Some(key)),
+    Err(keyring::Error::NoEntry) => Ok(None),
+    Err(err) => Err(err.to_string()),
+  }
+}
+
+#[tauri::command]
+fn set_api_key(provider: String, key: String) -> Result<(), String> {
+  let key = key.trim();
+  if key.is_empty() {
+    return Err("The key is empty.".into());
+  }
+  key_entry(&provider)?.set_password(key).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn delete_api_key(provider: String) -> Result<(), String> {
+  match key_entry(&provider)?.delete_credential() {
+    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+    Err(err) => Err(err.to_string()),
+  }
+}
+
 // The app was renamed from Knoway Reader, whose identifier put its data folder
 // at .../com.knowayreader.app. Move that library across once, the first time
 // the renamed app starts and finds no library of its own.
@@ -66,6 +107,7 @@ pub fn run() {
     .plugin(tauri_plugin_fs::init())
     // "Show in Finder" for a document's folder in the library.
     .plugin(tauri_plugin_opener::init())
+    .invoke_handler(tauri::generate_handler![get_api_key, set_api_key, delete_api_key])
     .setup(|app| {
       migrate_legacy_library(app.handle());
       if cfg!(debug_assertions) {

@@ -139,7 +139,7 @@ test("an error without a status code is rethrown as-is", async () => {
 test("passes timeoutMs to the SDK call and labels a timeout error", async () => {
   // Regression test companion to anthropicApi/google's stalled-connection
   // tests: the SDK's own `timeout` option is what stops a stalled OpenAI
-  // (or Muse Spark) connection from hanging forever — verify it's actually
+  // (or Meta) connection from hanging forever — verify it's actually
   // threaded through, and that the SDK's timeout error (no status code, so
   // the generic "status N" wrapping doesn't apply) gets a clear message.
   const capture = {};
@@ -227,7 +227,7 @@ test("a reply cut off before any text is an error, not an empty answer", async (
   const provider = createOpenAiCompatibleProvider({
     apiKey: "k",
     model: "m",
-    label: "Muse Spark API",
+    label: "Meta API",
     createClient: fakeClientFactory({}, {
       streamChunks: [{ choices: [{ delta: {}, finish_reason: "length" }] }],
       completion: { choices: [{ message: { content: "" }, finish_reason: "length" }] },

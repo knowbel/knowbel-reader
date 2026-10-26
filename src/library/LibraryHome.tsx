@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { Download, FolderOpen, Globe, MoreHorizontal, Plus, Search, Upload } from "lucide-react";
+import { Download, FolderOpen, Globe, MoreHorizontal, Plus, Search, Settings, Upload } from "lucide-react";
 import type { DocumentMeta, LibraryStorage } from "../storage/types";
 import {
   continueReading,
@@ -13,6 +13,7 @@ import {
 import { importFiles } from "./importFiles";
 import { canRevealFiles, revealInFileManager } from "./desktop";
 import AddFromUrlDialog from "../web/AddFromUrlDialog";
+import SettingsDialog from "../settings/SettingsDialog";
 import { looksLikeUrl } from "../web/url";
 
 // The library: every PDF and EPUB the reader has added, what they were last reading,
@@ -54,6 +55,7 @@ export default function LibraryHome({
   // "Add from URL", with the address it opened with; `autoStart` when that
   // came from a paste or a drop rather than the button.
   const [urlDialog, setUrlDialog] = useState<{ url: string; autoStart: boolean } | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const notesInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
@@ -260,6 +262,9 @@ export default function LibraryHome({
         >
           <Globe width={16} height={16} /> Add from URL
         </button>
+        <button type="button" className="library-icon-button" onClick={() => setSettingsOpen(true)} title="Settings: AI provider and API key">
+          <Settings width={17} height={17} />
+        </button>
         <div className="library-menu-anchor">
           <button type="button" className="library-icon-button" onClick={() => setMenuOpen((open) => !open)} title="More">
             <MoreHorizontal width={18} height={18} />
@@ -366,6 +371,7 @@ export default function LibraryHome({
         </div>
       ) : null}
 
+      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
       {urlDialog ? (
         <AddFromUrlDialog
           storage={storage}

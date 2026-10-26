@@ -38,6 +38,19 @@ function tooLarge(res, length) {
   });
 }
 
+// The reader's own provider, API key and models, from the app's AI settings
+// (src/settings/aiSettings.ts), sent as headers on each AI request. Without
+// them, the .env configuration applies. A key left out falls back to that
+// provider's .env key.
+export const AI_SETTINGS_HEADERS = ["X-AI-Provider", "X-AI-Key", "X-AI-Model", "X-AI-Fast-Model"];
+
+export function aiSettingsFrom(headers) {
+  const provider = (headers["x-ai-provider"] || "").toString().trim();
+  if (!provider) return null;
+  const value = (name) => (headers[name] || "").toString().trim() || undefined;
+  return { provider, apiKey: value("x-ai-key"), model: value("x-ai-model"), fastModel: value("x-ai-fast-model") };
+}
+
 // Stateless by design: everything a request needs comes with it, and
 // everything the reader keeps is stored client-side — this server is an LLM
 // proxy, plus a (cached) proxy for the glossary's dictionary lookups
@@ -49,21 +62,22 @@ export function buildApp({ models, lookupReference, webFetch }) {
   // The packaged desktop build loads the frontend from a custom scheme
   // (tauri://localhost on macOS, http://tauri.localhost on Windows — see
   // src/deepdive/api.ts's API_BASE) and calls this server via an absolute
-  // http://localhost:PORT URL, which is cross-origin from the webview's
-  // point of view. Without an explicit allow-list here, the browser's CORS
-  // check rejects both the preflight OPTIONS request (application/json
-  // POSTs aren't a CORS "simple request") and the real one — every dive
-  // call fails before it reaches a route handler, surfacing in the app as a
-  // generic network error ("Load failed" in WebKit). Plain http://localhost
-  // dev/browser use never hits this, since Vite's proxy makes those
-  // requests same-origin.
+  // http://localhost:PORT URL (served on 127.0.0.1, see ./index.js), which
+  // is cross-origin from the webview's point of view. Without an explicit
+  // allow-list here, the browser's CORS check rejects both the preflight
+  // OPTIONS request (application/json POSTs aren't a CORS "simple request")
+  // and the real one — every dive call fails before it reaches a route
+  // handler, surfacing in the app as a generic network error ("Load failed"
+  // in WebKit). Plain http://localhost dev/browser use never hits this,
+  // since Vite's proxy makes those requests same-origin. The AI settings
+  // headers have to be allowed too, or the preflight fails the same way.
   const ALLOWED_ORIGINS = new Set(["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]);
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin && ALLOWED_ORIGINS.has(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Access-Control-Allow-Methods", "GET, POST");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", ["Content-Type", ...AI_SETTINGS_HEADERS].join(", "));
     }
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
@@ -72,6 +86,11 @@ export function buildApp({ models, lookupReference, webFetch }) {
   // Area-highlight dives attach a screenshot (base64 PNG data URL) to the
   // request body, which is bigger than plain text turns.
   app.use(express.json({ limit: "15mb" }));
+
+  const modelsFor = (req) => {
+    const settings = aiSettingsFrom(req.headers);
+    return settings && models.withSettings ? models.withSettings(settings) : models;
+  };
 
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
@@ -87,7 +106,7 @@ export function buildApp({ models, lookupReference, webFetch }) {
     const length = textLength(system, messages) + systemSuffix.length;
     if (length > MAX_INPUT_CHARS) return tooLarge(res, length);
     await streamSse(res, "Dive reply failed.", (onText) =>
-      models.streamDiveReply({ system, ...(systemSuffix ? { systemSuffix } : {}), messages, onText }),
+      modelsFor(req).streamDiveReply({ system, ...(systemSuffix ? { systemSuffix } : {}), messages, onText }),
     );
   });
 
@@ -100,7 +119,7 @@ export function buildApp({ models, lookupReference, webFetch }) {
     }
     const length = textLength(system, messages);
     if (length > MAX_INPUT_CHARS) return tooLarge(res, length);
-    await streamSse(res, "Answer failed.", (onText) => models.streamAskReply({ system, messages, onText }));
+    await streamSse(res, "Answer failed.", (onText) => modelsFor(req).streamAskReply({ system, messages, onText }));
   });
 
   app.post("/api/glossary/stream", async (req, res) => {
@@ -114,7 +133,7 @@ export function buildApp({ models, lookupReference, webFetch }) {
     const length = system.length + prompt.length;
     if (length > MAX_INPUT_CHARS) return tooLarge(res, length);
     await streamSse(res, "Glossary definition failed.", (onText) =>
-      models.streamGlossary({
+      modelsFor(req).streamGlossary({
         system,
         messages: [{ role: "user", content: prompt, ...(images.length ? { images } : {}) }],
         onText,
@@ -151,7 +170,7 @@ export function buildApp({ models, lookupReference, webFetch }) {
     const length = system.length + prompt.length;
     if (length > MAX_INPUT_CHARS) return tooLarge(res, length);
     try {
-      const answer = await models.quickAnswer({ system, prompt });
+      const answer = await modelsFor(req).quickAnswer({ system, prompt });
       res.json({ answer });
     } catch (err) {
       res.status(502).json({ error: err.message || "Quick meaning failed." });
