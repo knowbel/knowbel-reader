@@ -3,9 +3,8 @@ import { X } from "lucide-react";
 import AnswerMarkdown from "../grounding/AnswerMarkdown";
 import type { ResolvedRef } from "../grounding/CitationChip";
 import { markersToPages } from "../grounding/citations";
-import type { SourceRef } from "../grounding/types";
-import { treeAnswerCount } from "./summary";
-import type { DivePanel } from "./types";
+import { treeRevision } from "./summary";
+import type { DivePanel, SummaryJobState } from "./types";
 
 // A dive tree's one-page summary (the treeSummary experiment), over the
 // dive panes: made on first open, kept on the tree's root, and marked out of
@@ -16,47 +15,37 @@ export default function TreeSummaryPanel({
   pageLabel,
   onJumpToSource,
   onSummarize,
+  job,
+  onCancel,
   onClose,
 }: {
   root: DivePanel;
   panels: DivePanel[];
   pageLabel: (pageNumber: number) => string;
   onJumpToSource: (ref: ResolvedRef) => void;
-  onSummarize: (
-    rootId: string,
-    onChunk: (chunk: string) => void,
-    onSources: (sources: SourceRef[]) => void,
-  ) => Promise<void>;
+  onSummarize: (rootId: string) => Promise<void>;
+  job?: SummaryJobState;
+  onCancel: () => void;
   onClose: () => void;
 }) {
-  const [streaming, setStreaming] = useState<string | null>(null);
-  const [streamingSources, setStreamingSources] = useState<SourceRef[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const started = useRef(false);
 
   const generate = async () => {
-    setError(null);
-    setStreaming("");
-    try {
-      await onSummarize(root.id, (chunk) => setStreaming((text) => (text ?? "") + chunk), setStreamingSources);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "The summary failed.");
-    }
-    setStreaming(null);
+    await onSummarize(root.id);
   };
 
   // First open with nothing saved: make one.
   useEffect(() => {
-    if (started.current || root.summary) return;
+    if (started.current || root.summary || job) return;
     started.current = true;
     void generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const summary = root.summary;
-  const newAnswers = summary ? treeAnswerCount(panels, root.id) - summary.turnCount : 0;
-  const busy = streaming !== null;
+  const stale = summary ? !summary.revision || summary.revision !== treeRevision(panels, root.id) : false;
+  const busy = job?.phase === "streaming";
 
   const copy = async () => {
     if (!summary) return;
@@ -85,21 +74,23 @@ export default function TreeSummaryPanel({
           <button type="button" className="answer-more" onClick={() => void generate()} disabled={busy}>
             {busy ? "Summarizing…" : summary ? "Update" : "Summarize"}
           </button>
+          {busy ? <button type="button" className="answer-more" onClick={onCancel}>Stop</button> : null}
           <button type="button" className="tree-summary-close" onClick={onClose} aria-label="Close summary" title="Close">
             <X width={16} height={16} />
           </button>
         </div>
       </header>
-      {!busy && summary && newAnswers > 0 ? (
+      {!busy && summary && stale ? (
         <p className="tree-summary-stale">
-          {newAnswers} new answer{newAnswers === 1 ? "" : "s"} since this summary.
+          The dive has changed since this summary. Update it to include the latest exploration.
         </p>
       ) : null}
-      {error ? <p className="tree-summary-error">⚠️ {error}</p> : null}
+      {summary ? <p className="tree-summary-stale">Created {new Date(summary.at).toLocaleString()}</p> : null}
+      {job?.error ? <p className="tree-summary-error">{job.error}</p> : null}
       <div className="tree-summary-body">
         {busy ? (
-          streaming ? (
-            <AnswerMarkdown content={streaming} sources={streamingSources} pageLabel={pageLabel} onJump={onJumpToSource} streaming />
+          job.text ? (
+            <AnswerMarkdown content={job.text} sources={job.sources} pageLabel={pageLabel} onJump={onJumpToSource} streaming />
           ) : (
             <span className="dive-thinking">Reading the dive…</span>
           )

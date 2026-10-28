@@ -30,7 +30,7 @@ import type { CommentedHighlight } from "./types";
 import "./App.css";
 import PersistentPdfPane from "./deepdive/PersistentPdfPane";
 import DeepDiveView from "./deepdive/DeepDiveView";
-import type { DiveHighlight, DiveHighlightPlacement, DivePanel, GeneralNote, Pin } from "./deepdive/types";
+import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, SummaryJobState, GeneralNote, Pin } from "./deepdive/types";
 import {
   ancestorChain,
   appendTurn,
@@ -58,8 +58,10 @@ import { DocDataWriter } from "./storage/docDataWriter";
 import { buildDivePrompt, openingMessage } from "./deepdive/prompts";
 import { getExperiments } from "./deepdive/experiments";
 import { divePromptOptions, prepareDiveSources, type DiveRequestContext } from "./deepdive/diveRequest";
+import { labelWithRegistry } from "./deepdive/sourceRegistry";
+import { abortable } from "./deepdive/job";
 import { mergeSuggestions, splitSuggestions, suggestedDiveSources, type DiveSuggestion } from "./deepdive/suggestions";
-import { buildTreeSummaryRequest, treeAnswerCount } from "./deepdive/summary";
+import { buildTreeSummaryRequest, treeAnswerCount, treeRevision } from "./deepdive/summary";
 import { streamDiveReply } from "./deepdive/api";
 import { downscaleImage, parseDataUrlImage } from "./deepdive/image";
 import { measureFreetextSize } from "./freetextSize";
@@ -197,6 +199,19 @@ export default function App() {
   const [loadedPdf, setLoadedPdf] = useState<LoadedPdf | null>(null);
   const [highlights, setHighlights] = useState<CommentedHighlight[]>([]);
   const [panels, setPanels] = useState<DivePanel[]>([]);
+  const [diveJobs, setDiveJobs] = useState<Record<string, DiveJobState>>({});
+  const [summaryJobs, setSummaryJobs] = useState<Record<string, SummaryJobState>>({});
+  const summaryControllers = useRef(new Map<string, AbortController>());
+  const diveScrollPositions = useRef(new Map<string, number>());
+  const diveControllers = useRef(new Map<string, AbortController>());
+  const cancelDiveJobs = useCallback(() => {
+    for (const controller of diveControllers.current.values()) controller.abort();
+    for (const controller of summaryControllers.current.values()) controller.abort();
+    diveControllers.current.clear();
+    summaryControllers.current.clear();
+    setDiveJobs({});
+    setSummaryJobs({});
+  }, []);
   const [pins, setPins] = useState<Pin[]>([]);
   const [diveHighlights, setDiveHighlights] = useState<DiveHighlight[]>([]);
   const [generalNotes, setGeneralNotes] = useState<GeneralNote[]>([]);
@@ -601,12 +616,17 @@ export default function App() {
       }
 
       const { docId } = opened.meta;
+      cancelDiveJobs();
+      diveScrollPositions.current.clear();
       const stored = <T,>(kind: keyof typeof opened.data): T[] => {
         const value = opened.data[kind];
         return Array.isArray(value) ? (value as T[]) : [];
       };
       const loadedHighlights = stored<CommentedHighlight>("highlights");
-      const loadedPanels = stored<DivePanel>("dives");
+      const loadedPanels = stored<DivePanel>("dives").map((panel) => {
+        const last = panel.turns[panel.turns.length - 1];
+        return last?.role === "user" ? appendTurn(panel, "assistant", "The response was interrupted. Please retry.", { status: "error" }) : panel;
+      });
       const loadedPins = stored<Pin>("pins");
       const loadedDiveHighlights = stored<DiveHighlight>("diveHighlights");
       const loadedGeneralNotes = stored<GeneralNote>("generalNotes");
@@ -661,7 +681,7 @@ export default function App() {
       setContinuousScroll(view?.continuous ?? true);
       setActiveSidebarPanel(view ? (view.panel as SidebarPanel | null) : "toc");
     },
-    [askStore, docDataWriter, flushReadingState, glossaryStore, navHistory],
+    [askStore, cancelDiveJobs, docDataWriter, flushReadingState, glossaryStore, navHistory],
   );
 
   const loadPdfFile = useCallback(
@@ -711,6 +731,7 @@ export default function App() {
 
   // Back to the library, saving everything about the document first.
   const goHome = useCallback(async () => {
+    cancelDiveJobs();
     await docDataWriter.flush();
     await flushReadingState();
     openMetaRef.current = null;
@@ -718,7 +739,7 @@ export default function App() {
     setDiveFocusId(null);
     setPdfDocument(null);
     setLoadedPdf(null);
-  }, [docDataWriter, flushReadingState]);
+  }, [cancelDiveJobs, docDataWriter, flushReadingState]);
 
   const pushUndo = (entry: UndoEntry) => {
     const stack = undoStackRef.current;
@@ -772,6 +793,15 @@ export default function App() {
   // content.
   const deletePanelSubtree = useCallback((panelId: string, fallbackFocusId: string | null) => {
     const idsToDelete = panelSubtreeIds(panelsRef.current, panelId);
+    for (const id of idsToDelete) {
+      diveControllers.current.get(id)?.abort();
+      diveControllers.current.delete(id);
+      summaryControllers.current.get(id)?.abort();
+      summaryControllers.current.delete(id);
+      diveScrollPositions.current.delete(id);
+    }
+    setDiveJobs((jobs) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !idsToDelete.has(id))));
+    setSummaryJobs((jobs) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !idsToDelete.has(id))));
     setPanels((previous) => previous.filter((panel) => !idsToDelete.has(panel.id)));
     setDiveHighlights((previous) => previous.filter((highlight) => !idsToDelete.has(highlight.panelId)));
     setDiveFocusId((current) => (current && idsToDelete.has(current) ? fallbackFocusId : current));
@@ -1318,94 +1348,104 @@ export default function App() {
       : null;
   const getAskContext = useCallback(() => askContextRef.current, []);
 
-  // Appends the user turn, chooses the document passages this request may
-  // cite (grounding/context.ts), streams the reply, and appends it with
-  // those sources. A failure appends an inline "⚠️" turn instead of
-  // throwing, so the composer never crashes (spec §9).
+  // A request belongs to the document and panel, not the rendered pane.
+  // Stream state survives navigation; completed or interrupted turns persist.
   const sendDiveMessage = useCallback(
     async (panelId: string, content: string, onChunk?: (chunk: string) => void, options: SendOptions = {}) => {
-      if (!loadedPdf) return;
+      if (!loadedPdf || diveControllers.current.has(panelId)) return;
       const panel = panelById(panelsRef.current, panelId);
       if (!panel) return;
+      const controller = new AbortController();
+      diveControllers.current.set(panelId, controller);
+      setDiveJobs((jobs) => ({ ...jobs, [panelId]: { phase: "preparing", text: "" } }));
+      const active = () => diveControllers.current.get(panelId) === controller && !controller.signal.aborted;
       const parentPanel = panel.parentId ? panelById(panelsRef.current, panel.parentId) : null;
       const ctx = diveRequestContext();
       const experiments = ctx?.experiments ?? getExperiments();
-
       const attachments = options.attachments ?? [];
-      const withUserTurn = appendTurn(panel, "user", content, { attachments, diagram: options.diagram });
+      const prior = options.retry ? { ...panel, turns: panel.turns.slice(0, -1) } : panel;
+      const withUserTurn = options.retry ? prior : appendTurn(prior, "user", content, { attachments, diagram: options.diagram });
+      panelsRef.current = replacePanel(panelsRef.current, withUserTurn);
       setPanels((prev) => replacePanel(prev, withUserTurn));
-
-      // A suggested dive's first request may already be resolved.
-      const key = panel.parentId ? prefetchKey(panel.parentId, panel.selection) : null;
-      const entry = key && panel.turns.length === 0 && !attachments.length ? suggestionPrefetchRef.current.get(key) : undefined;
-      if (key) suggestionPrefetchRef.current.delete(key);
-      const prefetched = entry && entry.stamp === prefetchStamp(panel.inheritedSources) ? entry.sources : undefined;
-      const prepared = ctx
-        ? await (prefetched ?? prepareDiveSources(ctx, panel, content, { reuse: options.reuseSources ?? false, attachments }))
-        : undefined;
-      const sources = prepared?.sources;
-      if (sources) options.onSources?.(sources);
-      const attachedLabels =
-        attachments.length && sources ? sources.filter((s) => s.via === "attached" || (!s.via && !s.chunkId)).map((s) => s.label) : [];
-      const prompt = buildDivePrompt(
-        loadedPdf.fileName,
-        withUserTurn,
-        parentPanel,
-        sources
-          ? {
-              sources,
-              pageLabel: pageLabelFor,
-              attachmentNote: attachmentInstructions(attachments, attachedLabels, pageLabelFor),
-            }
-          : undefined,
-        ctx ? divePromptOptions(ctx, withUserTurn, sources, { splitAt: prepared?.splitAt, diagram: options.diagram }) : {},
-      );
-
-      // The backend is stateless, so each request carries the conversation
-      // itself — but only the last two exchanges of it (the selection and
-      // its sources are in the system prompt). Earlier answers' citation
-      // markers pointed at their own requests' sources, so they're resent
-      // as plain page references. An area-highlight's screenshot goes with
-      // the first message sent, for the model to keep the visual context.
-      const sent = historyTurns(withUserTurn.turns, DIVE_HISTORY_TURNS, experiments.keepOpeningAnswer);
-      const images = attachmentImages(attachments);
-      const messages = sent.map((turn, index) => ({
-        role: turn.role,
-        content: turn.role === "assistant" ? markersToPages(turn.content, turn.sources ?? [], pageLabelFor) : turn.content,
-        ...(index === 0 && panel.selectionImage ? { image: panel.selectionImage } : {}),
-        // Regions added to this question travel with it, not with later ones.
-        ...(index === sent.length - 1 && images.length ? { images } : {}),
-      }));
-
+      let streamed = "";
       try {
+        if (!ctx) throw new Error("The document is not ready. Please retry.");
+        const key = panel.parentId ? prefetchKey(panel.parentId, panel.selection) : null;
+        const entry = key && prior.turns.length === 0 && !attachments.length ? suggestionPrefetchRef.current.get(key) : undefined;
+        if (key) suggestionPrefetchRef.current.delete(key);
+        const prefetched = entry && entry.stamp === prefetchStamp(panel.inheritedSources) ? entry.sources : undefined;
+        const expansionContext = content === "More detail, please."
+          ? [...prior.turns].reverse().find((turn) => turn.role === "assistant" && !turn.status)?.content.slice(0, 1200) ?? ""
+          : "";
+        let prepared = await abortable(prefetched ?? prepareDiveSources(ctx, prior, [content, expansionContext].filter(Boolean).join(" "), { reuse: options.reuseSources ?? false, attachments, wider: options.wider }), controller.signal);
+        if (!active()) throw new Error("Request stopped.");
+        if (!prepared && options.generalAllowed) prepared = { sources: [] };
+        if (!prepared) throw new Error("The document text could not be prepared. Please retry.");
+        const labeled = labelWithRegistry(prepared.sources, prior.sourceRegistry ?? []);
+        const sources = labeled.sources;
+        options.onSources?.(sources);
+        setDiveJobs((jobs) => ({ ...jobs, [panelId]: { phase: "streaming", text: "", sources } }));
+        const attachedLabels = attachments.length ? sources.filter((s) => s.via === "attached" || (!s.via && !s.chunkId)).map((s) => s.label) : [];
+        if (!sources.length && !panel.selectionImage && !attachments.some((attachment) => attachment.image) && !options.generalAllowed) {
+          setPanels((prev) => {
+            const latest = panelById(prev, panelId);
+            return latest ? replacePanel(prev, appendTurn(latest, "assistant", "[not-covered] The passages I found don't answer this question.", { sources })) : prev;
+          });
+          return;
+        }
+        const sent = historyTurns(withUserTurn.turns, DIVE_HISTORY_TURNS, experiments.keepOpeningAnswer);
+        const sentTurns = new Set(sent);
+        const earlierQuestions = withUserTurn.turns.filter((turn, index, turns) => {
+          const answer = turns[index + 1];
+          return turn.role === "user" && !sentTurns.has(turn) && answer?.role === "assistant" && !answer.status && !answer.content.startsWith("⚠️");
+        }).map((turn) => turn.content.slice(0, 500)).slice(-8);
+        const prompt = buildDivePrompt(loadedPdf.fileName, withUserTurn, parentPanel, {
+          sources, pageLabel: pageLabelFor,
+          attachmentNote: attachmentInstructions(attachments, attachedLabels, pageLabelFor),
+        }, { ...divePromptOptions(ctx, withUserTurn, sources, { splitAt: prepared.splitAt, diagram: options.diagram }), generalAllowed: options.generalAllowed, earlierQuestions });
+        const images = attachmentImages(attachments);
+        const messages = sent.map((turn, index) => ({
+          role: turn.role,
+          content: turn.role === "assistant" ? markersToPages(turn.content, turn.sources ?? [], pageLabelFor) : turn.content,
+          ...(index === 0 && panel.selectionImage ? { image: panel.selectionImage } : {}),
+          ...(index === sent.length - 1 && images.length ? { images } : {}),
+        }));
         const full = await streamDiveReply({
-          system: prompt.system,
-          ...(prompt.suffix ? { systemSuffix: prompt.suffix } : {}),
-          messages,
-          onText: (chunk) => onChunk?.(chunk),
+          system: prompt.system, ...(prompt.suffix ? { systemSuffix: prompt.suffix } : {}), messages,
+          signal: controller.signal,
+          onText: (chunk) => {
+            if (!active()) return;
+            streamed += chunk;
+            onChunk?.(chunk);
+            setDiveJobs((jobs) => jobs[panelId] ? { ...jobs, [panelId]: { ...jobs[panelId], text: streamed } } : jobs);
+          },
         });
-        // Suggested next steps come at the end of the answer; they're kept
-        // apart from its text.
+        if (!active()) throw new Error("Request stopped.");
         const { body, suggestions } = experiments.suggestions ? splitSuggestions(full) : { body: full, suggestions: [] };
         const merged = experiments.suggestions && !options.diagram ? mergeSuggestions(suggestions, sources) : [];
-        // Nothing to show is a failure, not an (empty) answer with a badge.
         if (!body.trim()) throw new Error("The model returned an empty answer. Try asking again.");
         setPanels((prev) => {
-          const latest = panelById(prev, panelId) ?? withUserTurn;
+          const latest = panelById(prev, panelId);
+          if (!latest) return prev;
           const answered = appendTurn(latest, "assistant", body, { sources, suggestions: merged });
-          // Stable sources: the first grounded answer's set is what later
-          // follow-ups build on.
-          const withBase =
-            experiments.stableSources && sources && !answered.baseSources ? { ...answered, baseSources: sources } : answered;
+          const withBase = { ...answered, sourceRegistry: labeled.registry, ...(experiments.stableSources && !answered.baseSources ? { baseSources: sources } : {}) };
           return replacePanel(prev, withBase);
         });
         if (ctx && merged.length) prefetchSuggestedDives(panelId, merged, body, sources);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Dive reply failed.";
+        if (diveControllers.current.get(panelId) !== controller) return;
+        const cancelled = controller.signal.aborted;
+        const message = cancelled ? "Stopped. You can retry this question." : err instanceof Error ? err.message : "Dive reply failed.";
         setPanels((prev) => {
-          const latest = panelById(prev, panelId) ?? withUserTurn;
-          return replacePanel(prev, appendTurn(latest, "assistant", `⚠️ ${message}`));
+          const latest = panelById(prev, panelId);
+          if (!latest) return prev;
+          return replacePanel(prev, appendTurn(latest, "assistant", streamed ? `${streamed}\n\n${message}` : message, { status: cancelled ? "cancelled" : "error", error: message }));
         });
+      } finally {
+        if (diveControllers.current.get(panelId) === controller) {
+          diveControllers.current.delete(panelId);
+          setDiveJobs((jobs) => { const next = { ...jobs }; delete next[panelId]; return next; });
+        }
       }
     },
     // diveRequestContext and prefetchSuggestedDives read only refs, so
@@ -1672,19 +1712,36 @@ export default function App() {
   // A one-page summary of a whole dive tree (the treeSummary experiment),
   // streamed through the dive role and kept on the tree's root.
   const summarizeDiveTree = useCallback(
-    async (rootId: string, onChunk: (chunk: string) => void, onSources: (sources: SourceRef[]) => void) => {
-      if (!loadedPdf) return;
+    async (rootId: string) => {
+      if (!loadedPdf || summaryControllers.current.has(rootId)) return;
+      const controller = new AbortController();
+      summaryControllers.current.set(rootId, controller);
+      const revision = treeRevision(panelsRef.current, rootId);
       const { system, prompt, sources } = buildTreeSummaryRequest({
         fileName: loadedPdf.fileName,
         panels: panelsRef.current,
         rootId,
         pageLabel: pageLabelFor,
       });
-      onSources(sources);
-      const content = await streamDiveReply({ system, messages: [{ role: "user", content: prompt }], onText: onChunk });
-      if (!content.trim()) throw new Error("The model returned an empty summary. Try again.");
-      const summary = { content, sources, at: new Date().toISOString(), turnCount: treeAnswerCount(panelsRef.current, rootId) };
-      setPanels((prev) => prev.map((panel) => (panel.id === rootId ? { ...panel, summary } : panel)));
+      setSummaryJobs((jobs) => ({ ...jobs, [rootId]: { phase: "streaming", text: "", sources } }));
+      try {
+        const content = await streamDiveReply({ system, messages: [{ role: "user", content: prompt }], signal: controller.signal, onText: (chunk) => {
+          if (summaryControllers.current.get(rootId) !== controller || controller.signal.aborted) return;
+          setSummaryJobs((jobs) => jobs[rootId] ? { ...jobs, [rootId]: { ...jobs[rootId], text: jobs[rootId].text + chunk } } : jobs);
+        } });
+        if (summaryControllers.current.get(rootId) !== controller) return;
+        if (controller.signal.aborted) throw new Error("Summary stopped.");
+        if (!content.trim()) throw new Error("The model returned an empty summary. Try again.");
+        const summary = { content, sources, at: new Date().toISOString(), turnCount: treeAnswerCount(panelsRef.current, rootId), revision };
+        setPanels((prev) => prev.map((panel) => (panel.id === rootId ? { ...panel, summary } : panel)));
+        setSummaryJobs((jobs) => { const next = { ...jobs }; delete next[rootId]; return next; });
+      } catch (error) {
+        if (summaryControllers.current.get(rootId) !== controller) return;
+        const cancelled = controller.signal.aborted;
+        setSummaryJobs((jobs) => ({ ...jobs, [rootId]: { ...jobs[rootId], phase: cancelled ? "cancelled" : "error", sources, text: jobs[rootId]?.text ?? "", error: cancelled ? "Summary stopped." : error instanceof Error ? error.message : "The summary failed." } }));
+      } finally {
+        if (summaryControllers.current.get(rootId) === controller) summaryControllers.current.delete(rootId);
+      }
     },
     [loadedPdf, pageLabelFor],
   );
@@ -1943,6 +2000,21 @@ export default function App() {
         {diveFocusId ? (
           <DeepDiveView
             panels={panels}
+            jobs={diveJobs}
+            summaryJobs={summaryJobs}
+            onCancelSummary={(id) => summaryControllers.current.get(id)?.abort()}
+            onCancel={(id) => diveControllers.current.get(id)?.abort()}
+            onReturnToPassage={(id) => {
+              const root = panelById(panelsRef.current, id);
+              const highlight = highlightsRef.current.find((item) => item.id === root?.anchorHighlightId);
+              setDiveFocusId(id);
+              if (highlight) window.setTimeout(() => jumpToHighlight(highlight), 100);
+              else if (root?.pageNumber) {
+                setCurrentPage(root.pageNumber);
+                window.setTimeout(() => highlighterUtilsRef.current?.getViewer()?.scrollPageIntoView({ pageNumber: root.pageNumber! }), 100);
+              }
+            }}
+            scrollPositions={diveScrollPositions.current}
             diveHighlights={diveHighlights}
             scrolledToDiveHighlightId={scrolledToDiveHighlightId}
             focusId={diveFocusId}

@@ -91,8 +91,8 @@ export function createAnthropicApiProvider({
     // this get it appended to the system prompt (../models.js).
     supportsSystemSuffix: true,
 
-    async streamReply({ system, systemSuffix, messages, onText, onUsage }) {
-      const { signal, clear } = withTimeoutSignal(timeoutMs);
+    async streamReply({ system, systemSuffix, messages, onText, onUsage, signal: parentSignal }) {
+      const { signal, clear } = withTimeoutSignal(timeoutMs, parentSignal);
       try {
         const res = await post(
           fetchImpl,

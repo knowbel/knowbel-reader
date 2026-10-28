@@ -1,6 +1,6 @@
 import { citedSources } from "../grounding/citations.ts";
 import { labelSources } from "../grounding/context.ts";
-import { MATH_RULES, renderSources } from "../grounding/prompt.ts";
+import { renderSources } from "../grounding/prompt.ts";
 import type { SourceRef } from "../grounding/types.ts";
 import { openingMessage } from "./prompts.ts";
 import { treeOf } from "./tree.ts";
@@ -40,9 +40,21 @@ function relabel(text: string, own: SourceRef[], shared: Map<string, string>): s
 // date.
 export function treeAnswerCount(panels: DivePanel[], rootId: string): number {
   return treeOf(panels, rootId).reduce(
-    (sum, { panel }) => sum + panel.turns.filter((turn) => turn.role === "assistant" && !turn.content.startsWith("⚠️")).length,
+    (sum, { panel }) => sum + panel.turns.filter((turn) => turn.role === "assistant" && !turn.status && !turn.content.startsWith("⚠️")).length,
     0,
   );
+}
+
+// A stable description of the inputs, so edits and deleted branches also
+// invalidate a summary even when the number of answers is unchanged.
+export function treeRevision(panels: DivePanel[], rootId: string): string {
+  const data = JSON.stringify(treeOf(panels, rootId).map(({ panel }) => ({
+    id: panel.id, parentId: panel.parentId, selection: panel.selection,
+    turns: panel.turns.filter((turn) => !turn.status && !turn.content.startsWith("⚠️")).map(({ role, content, sources }) => ({ role, content, sources })),
+  })));
+  let hash = 2166136261;
+  for (let i = 0; i < data.length; i++) hash = Math.imul(hash ^ data.charCodeAt(i), 16777619);
+  return `v1-${(hash >>> 0).toString(16)}-${data.length}`;
 }
 
 export function buildTreeSummaryRequest(params: {
@@ -58,7 +70,7 @@ export function buildTreeSummaryRequest(params: {
   const collected = new Map<string, SourceRef>();
   for (const { panel } of tree) {
     for (const turn of panel.turns) {
-      if (turn.role !== "assistant" || !turn.sources) continue;
+      if (turn.role !== "assistant" || turn.status || !turn.sources) continue;
       for (const source of citedSources(turn.content, turn.sources)) {
         if (collected.size >= MAX_SOURCES) break;
         if (!collected.has(sourceKey(source))) collected.set(sourceKey(source), source);
@@ -77,15 +89,20 @@ export function buildTreeSummaryRequest(params: {
     const lines = [`## ${title}: "${panel.selection || "(a selected region of the page)"}"`];
     panel.turns.forEach((turn, index) => {
       if (turn.role === "user") {
+        const answer = panel.turns[index + 1];
+        if (!answer || answer.role !== "assistant" || answer.status || answer.content.startsWith("⚠️")) return;
         if (index === 0 && turn.content === openingMessage(panel.selection)) return;
         lines.push(`Reader: ${turn.content}`);
-      } else if (!turn.content.startsWith("⚠️")) {
+      } else if (!turn.status && !turn.content.startsWith("⚠️")) {
         const text = relabel(turn.content, turn.sources ?? [], shared);
         lines.push(`Answer: ${text.length > ANSWER_CHARS ? `${text.slice(0, ANSWER_CHARS)}…` : text}`);
       }
     });
     const block = lines.join("\n\n");
-    if (length + block.length > TRANSCRIPT_CHARS) break;
+    if (length + block.length > TRANSCRIPT_CHARS) {
+      parts.push("Some later branches were omitted because the exploration is long. Summarize only the material included here.");
+      break;
+    }
     parts.push(block);
     length += block.length;
 
@@ -105,7 +122,7 @@ export function buildTreeSummaryRequest(params: {
 
   const system = `You write a study summary of a reader's deep dive into a passage of a PDF titled "${params.fileName}": everything they explored, tied back to the passage they started from${
     root?.selection ? ` ("${root.selection.slice(0, 300)}")` : ""
-  }. Keep what helps them understand that passage; drop repetition and anything they didn't need.
+  }. Keep what helps them understand that passage; drop repetition and anything they didn't need. Earlier assistant answers are context, not evidence. Support claims with the supplied document passages, and acknowledge when they do not establish an answer.
 
 Format, in markdown:
 **In short:** one to three sentences on what the passage means and why it matters, in plain words.
@@ -118,13 +135,16 @@ Format, in markdown:
 - **term, or $symbol$**: its meaning here.
 
 ## Still open
+- Questions the reader asked that the supplied sources did not resolve. Only if there are any; otherwise leave this section out.
+
+## Suggested next steps
 - Directions suggested but not explored. Only if the transcript lists some; otherwise leave this section out.
 
 Length: at most a page (about 350 words), and shorter when the dive was short.
 
 After each claim taken from a source, cite it by id: [S2]. For something reasoned from the sources: [inferred: S2]. For outside knowledge: [general]. Never cite an id that isn't listed below.
 
-${MATH_RULES}
+Use KaTeX math. Reconstruct a formula only when its notation is clear from the sources; otherwise acknowledge the uncertainty.
 
 Sources from the document:
 ${renderSources(sources, params.pageLabel)}`;

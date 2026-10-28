@@ -1,8 +1,7 @@
 import { useState, type RefObject } from "react";
 import { FileText } from "lucide-react";
-import type { DiveHighlight, DiveHighlightPlacement, DivePanel } from "./types";
+import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, SummaryJobState } from "./types";
 import type { Attachment } from "../grounding/attachments";
-import type { SourceRef } from "../grounding/types";
 import { ancestorChain, paneWindow, panelById } from "./tree";
 import DivePanelPane, { type DivePanelPaneProps } from "./DivePanelPane";
 import { useExperiments } from "./experiments";
@@ -11,6 +10,12 @@ import TreeSummaryPanel from "./TreeSummaryPanel";
 
 export interface DeepDiveViewProps {
   panels: DivePanel[];
+  jobs: Record<string, DiveJobState>;
+  summaryJobs: Record<string, SummaryJobState>;
+  onCancelSummary: (rootId: string) => void;
+  onCancel: (panelId: string) => void;
+  onReturnToPassage: (rootId: string) => void;
+  scrollPositions: Map<string, number>;
   diveHighlights: DiveHighlight[];
   scrolledToDiveHighlightId: string | null;
   focusId: string;
@@ -20,7 +25,7 @@ export interface DeepDiveViewProps {
   onSendMessage: DivePanelPaneProps["onSendMessage"];
   onNestedDive: (request: { parentId: string; selection: string; contextText: string } & DiveHighlightPlacement) => void;
   onSuggestedDive: DivePanelPaneProps["onSuggestedDive"];
-  onSummarizeTree: (rootId: string, onChunk: (chunk: string) => void, onSources: (sources: SourceRef[]) => void) => Promise<void>;
+  onSummarizeTree: (rootId: string) => Promise<void>;
   pageLabel: DivePanelPaneProps["pageLabel"];
   onJumpToSource: DivePanelPaneProps["onJumpToSource"];
   attachments: Record<string, Attachment[]>; // per dive
@@ -46,6 +51,12 @@ const NO_ATTACHMENTS: Attachment[] = [];
 
 export default function DeepDiveView({
   panels,
+  jobs,
+  summaryJobs,
+  onCancelSummary,
+  onCancel,
+  onReturnToPassage,
+  scrollPositions,
   diveHighlights,
   scrolledToDiveHighlightId,
   focusId,
@@ -119,6 +130,8 @@ export default function DeepDiveView({
           pageLabel={pageLabel}
           onJumpToSource={onJumpToSource}
           onSummarize={onSummarizeTree}
+          job={summaryJobs[root.id]}
+          onCancel={() => onCancelSummary(root.id)}
           onClose={() => setSummaryOpenFor(null)}
         />
       ) : null}
@@ -130,6 +143,10 @@ export default function DeepDiveView({
             ) : (
               <DivePanelPane
                 panel={panelById(panels, entry.id)!}
+                job={jobs[entry.id]}
+                onCancel={onCancel}
+                onReturnToPassage={onReturnToPassage}
+                scrollPositions={scrollPositions}
                 allPanels={panels}
                 diveHighlights={diveHighlights}
                 scrolledToDiveHighlightId={scrolledToDiveHighlightId}

@@ -6,19 +6,23 @@ import { webFetchHandler } from "./web.js";
 // {done, text} frame with the full reply — or an {error} frame, since the
 // 200 status has already been sent by the time the model can fail.
 async function streamSse(res, fallbackError, run) {
+  const controller = new AbortController();
+  const onClose = () => { if (!res.writableEnded) controller.abort(); };
+  res.on("close", onClose);
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  const send = (obj) => { if (!res.destroyed) res.write(`data: ${JSON.stringify(obj)}\n\n`); };
   try {
-    const full = await run((t) => send({ text: t }));
+    const full = await run((t) => send({ text: t }), controller.signal);
     send({ done: true, text: full });
   } catch (err) {
     send({ error: err.message || fallbackError });
   }
-  res.end();
+  res.off("close", onClose);
+  if (!res.destroyed) res.end();
 }
 
 // A hard ceiling on the text in one request (system prompt plus messages;
@@ -105,8 +109,8 @@ export function buildApp({ models, lookupReference, webFetch }) {
     }
     const length = textLength(system, messages) + systemSuffix.length;
     if (length > MAX_INPUT_CHARS) return tooLarge(res, length);
-    await streamSse(res, "Dive reply failed.", (onText) =>
-      modelsFor(req).streamDiveReply({ system, ...(systemSuffix ? { systemSuffix } : {}), messages, onText }),
+    await streamSse(res, "Dive reply failed.", (onText, signal) =>
+      modelsFor(req).streamDiveReply({ system, ...(systemSuffix ? { systemSuffix } : {}), messages, onText, signal }),
     );
   });
 

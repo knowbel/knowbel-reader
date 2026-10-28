@@ -98,7 +98,7 @@ function localChunks(input: DiveSourceInput, pageNumber: number): TextChunk[] {
   if (pageChunks.length === 0) return [];
   const range = locateSelection(input.index, pageNumber, input.selection);
   if (!range) {
-    if (!input.selection.trim()) return pageChunks.slice(0, 2);
+    if (!input.selection.trim()) return [];
     const scores = scoreChunks(input.bm25, input.selection);
     const best = pageChunks
       .map((chunk) => ({ chunk, score: scores[input.chunks.indexOf(chunk)] ?? 0 }))
@@ -151,7 +151,7 @@ export function buildDiveSources(
   let window: LocalWindow | null = null;
   if (input.pageNumber !== null) {
     window = strategy.localWindow || area ? windowAround(input, input.pageNumber, area) : null;
-    (window?.chunks ?? localChunks(input, input.pageNumber))
+    (window?.chunks ?? (area && !input.selection.trim() ? [] : localChunks(input, input.pageNumber)))
       .map((chunk) => tagged(fromChunk(chunk), "local"))
       .filter(notAttached)
       .forEach(add);
@@ -251,7 +251,7 @@ export function buildDiveSources(
 
   if (query) {
     const relevant = selectRelevant(input.bm25, query, {
-      typicalChars: RETRIEVAL_TYPICAL_CHARS,
+      typicalChars: budget.typicalChars > DIVE_BUDGET.typicalChars ? budget.typicalChars : RETRIEVAL_TYPICAL_CHARS,
       ceilingChars: Math.max(0, budget.ceilingChars - used),
       exclude: taken,
       weights,

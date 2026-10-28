@@ -4,17 +4,17 @@ import type { ResolvedRef } from "./CitationChip";
 import type { AnswerGrounding, SourceRef } from "./types";
 
 const BADGES: Record<AnswerGrounding, { label: string; title: string }> = {
-  document: { label: "From the document", title: "Every claim cites a passage of this document." },
+  document: { label: "Cites the document", title: "The answer cites passages supplied to the model; citations do not verify every claim." },
   inferred: {
-    label: "Inferred from the document",
-    title: "Grounded in this document; some points are reasoned from it rather than stated in it.",
+    label: "Includes cited inference",
+    title: "The answer marks some points as inferred from cited passages.",
   },
   mixed: {
-    label: "Includes general knowledge",
-    title: "Some points come from outside this document (or couldn't be checked against it) — see the chips.",
+    label: "Mixed sources",
+    title: "The answer contains general knowledge or citations that could not be resolved — see the chips.",
   },
-  general: { label: "General knowledge", title: "Nothing here cites this document." },
-  "not-covered": { label: "Not covered in this document", title: "The passages searched don't address this." },
+  general: { label: "No document citations", title: "The answer contains no valid document citations." },
+  "not-covered": { label: "Not found in these passages", title: "The passages supplied did not answer this question." },
 };
 
 // One badge per answer, summarizing its citations — the same look as the
@@ -47,7 +47,7 @@ export function SourcesFooter({
   const [open, setOpen] = useState(false);
   if (sent.length === 0) return null;
   const pages = [...new Set(cited.map((source) => `p. ${pageLabel(source.pageNumber)}`))];
-  const summary = `${basis ?? `Based on ${sent.length} passage${sent.length === 1 ? "" : "s"}`}${
+  const summary = `${basis ?? `${sent.length} passage${sent.length === 1 ? "" : "s"} supplied`}${
     pages.length ? ` · cites ${pages.join(", ")}` : ""
   }`;
   return (

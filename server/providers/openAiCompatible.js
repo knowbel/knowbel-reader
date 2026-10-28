@@ -96,12 +96,12 @@ export function createOpenAiCompatibleProvider({
   const streamExtra = streamUsage ? { stream_options: { include_usage: true } } : {};
 
   return {
-    async streamReply({ system, messages, onText, onUsage }) {
+    async streamReply({ system, messages, onText, onUsage, signal }) {
       let accumulated = "";
       try {
         const stream = await client.chat.completions.create(
           { model, stream: true, messages: toChatMessages(system, messages), ...extra, ...streamExtra },
-          { timeout: timeoutMs },
+          { timeout: timeoutMs, ...(signal ? { signal } : {}) },
         );
         let finishReason = null;
         for await (const chunk of stream) {

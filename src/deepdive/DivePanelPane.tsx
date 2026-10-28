@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import type { DiveHighlight, DiveHighlightPlacement, DivePanel } from "./types";
+import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState } from "./types";
 import { childrenOf, rootPanelOf } from "./tree";
 import { useSelectionCapture } from "./useSelectionCapture";
 import type { AnchorRect } from "./useFlippedPlacement";
@@ -46,10 +46,17 @@ export interface SendOptions {
   onSources?: (sources: SourceRef[]) => void; // the sources, once chosen — before the reply streams in
   attachments?: Attachment[]; // text the reader added to this question
   diagram?: boolean; // asks for a diagram (the diagrams experiment)
+  retry?: boolean;
+  generalAllowed?: boolean;
+  wider?: boolean;
 }
 
 export interface DivePanelPaneProps {
   panel: DivePanel;
+  job?: DiveJobState;
+  onCancel: (panelId: string) => void;
+  onReturnToPassage: (rootId: string) => void;
+  scrollPositions: Map<string, number>;
   allPanels: DivePanel[];
   diveHighlights: DiveHighlight[];
   scrolledToDiveHighlightId: string | null;
@@ -281,7 +288,7 @@ const diagramOf = splitDiagram;
 // A grounded answer, not an error notice: gets a badge and a sources line.
 function isGroundedAnswer(turn: DivePanel["turns"][number]): turn is DivePanel["turns"][number] & { sources: SourceRef[] } {
   return (
-    turn.role === "assistant" && Array.isArray(turn.sources) && Boolean(turn.content.trim()) && !turn.content.startsWith("⚠️")
+    turn.role === "assistant" && !turn.status && Array.isArray(turn.sources) && Boolean(turn.content.trim()) && !turn.content.startsWith("⚠️")
   );
 }
 
@@ -398,12 +405,13 @@ function RootAnchorCard({
           {root.pageNumber !== undefined ? ` p. ${pageLabel(root.pageNumber)}` : ""}
         </span>
         <button type="button" className="dive-root-anchor-open" onClick={onOpen}>
-          Back to it
+          Return to passage
         </button>
       </div>
       <button type="button" className="dive-root-anchor-text" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {clipped}
       </button>
+      {open && root.selectionImage ? <img className="dive-source-image" src={`data:${root.selectionImage.mediaType};base64,${root.selectionImage.data}`} alt="Original selected region" /> : null}
     </div>
   );
 }
@@ -423,6 +431,10 @@ function ThinkingIndicator() {
 
 export default function DivePanelPane({
   panel,
+  job,
+  onCancel,
+  onReturnToPassage,
+  scrollPositions,
   allPanels,
   diveHighlights,
   scrolledToDiveHighlightId,
@@ -445,9 +457,9 @@ export default function DivePanelPane({
 }: DivePanelPaneProps) {
   const experiments = useExperiments();
   const [draft, setDraft] = useState("");
-  const [pending, setPending] = useState(false);
-  const [streamingReply, setStreamingReply] = useState("");
-  const [streamingSources, setStreamingSources] = useState<SourceRef[] | undefined>(undefined);
+  const pending = Boolean(job);
+  const streamingReply = job?.text ?? "";
+  const streamingSources = job?.sources;
   const [editingHighlight, setEditingHighlight] = useState<{
     highlightId: string;
     anchorRect: AnchorRect;
@@ -461,6 +473,15 @@ export default function DivePanelPane({
   } | null>(null);
   const dialogueRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const element = dialogueRef.current;
+    if (!element) return;
+    element.scrollTop = scrollPositions.get(panel.id) ?? 0;
+    const save = () => { scrollPositions.set(panel.id, element.scrollTop); };
+    element.addEventListener("scroll", save);
+    return () => { save(); element.removeEventListener("scroll", save); };
+  }, [panel.id, scrollPositions]);
 
   const { captured, clear } = useSelectionCapture(dialogueRef, "[data-turn-index]");
   const children = useMemo(() => childrenOf(allPanels, panel.id), [allPanels, panel.id]);
@@ -564,21 +585,14 @@ export default function DivePanelPane({
 
   const send = async (content: string, options: Pick<SendOptions, "reuseSources" | "diagram"> = {}) => {
     if (!content.trim() || pending) return;
-    setPending(true);
-    setStreamingReply("");
-    setStreamingSources(undefined);
     // "More detail" is about the last answer; what's attached waits for the
     // reader's own next question.
     const attached = options.reuseSources || options.diagram ? [] : attachments;
     if (attached.length) onClearAttachments();
-    await onSendMessage(panel.id, content, (chunk) => setStreamingReply((prev) => prev + chunk), {
+    await onSendMessage(panel.id, content, undefined, {
       ...options,
       attachments: attached,
-      onSources: setStreamingSources,
     });
-    setStreamingReply("");
-    setStreamingSources(undefined);
-    setPending(false);
   };
 
   // A reply is in flight whenever the newest turn is the reader's own —
@@ -586,8 +600,7 @@ export default function DivePanelPane({
   // `pending`), but also for a freshly opened dive, whose first message is
   // sent by the caller before this component ever mounts, so `pending`
   // alone would miss it.
-  const lastTurn = panel.turns[panel.turns.length - 1];
-  const awaitingReply = pending || lastTurn?.role === "user";
+  const awaitingReply = pending;
 
   const root = experiments.rootAnchor && panel.parentId ? rootPanelOf(allPanels, panel.id) : null;
   const askedLater = (turnIndex: number, text: string) =>
@@ -609,7 +622,7 @@ export default function DivePanelPane({
       <header className="dive-panel-header">{panel.label}</header>
       <div className="dive-panel-dialogue" ref={dialogueRef}>
         {root && root.id !== panel.id ? (
-          <RootAnchorCard root={root} pageLabel={pageLabel} onOpen={() => onOpenDive(root.id)} />
+          <RootAnchorCard root={root} pageLabel={pageLabel} onOpen={() => onReturnToPassage(root.id)} />
         ) : null}
         {panel.turns.map((turn, index) =>
           isOpeningTurn(panel, index) ? (
@@ -637,6 +650,28 @@ export default function DivePanelPane({
                 sources={turn.role === "assistant" ? turn.sources : undefined}
                 pageLabel={pageLabel}
               />
+              {turn.role === "assistant" && (turn.status === "error" || turn.status === "cancelled" || turn.content.startsWith("⚠️")) && index === panel.turns.length - 1 ? (
+                <div><button type="button" className="answer-more" disabled={awaitingReply} onClick={() => {
+                  const question = panel.turns[index - 1];
+                  if (question?.role === "user") void onSendMessage(panel.id, question.content, undefined, { retry: true, attachments: question.attachments, diagram: question.diagram });
+                }}>Retry</button>
+                {turn.error?.includes("document text could not be prepared") ? <button type="button" className="answer-more" disabled={awaitingReply} onClick={() => {
+                  const question = panel.turns[index - 1];
+                  if (question?.role === "user") void onSendMessage(panel.id, question.content, undefined, { retry: true, generalAllowed: true, attachments: question.attachments });
+                }}>Use general knowledge</button> : null}</div>
+              ) : null}
+              {isGroundedAnswer(turn) && parseAnswer(turn.content, turn.sources).notCovered && index === panel.turns.length - 1 && !awaitingReply ? (
+                <div className="answer-footer">
+                  <button type="button" className="answer-more" onClick={() => {
+                    const question = panel.turns[index - 1];
+                    if (question?.role === "user") void onSendMessage(panel.id, question.content, undefined, { retry: true, wider: true, attachments: question.attachments });
+                  }}>Search more widely</button>
+                  <button type="button" className="answer-more" onClick={() => {
+                    const question = panel.turns[index - 1];
+                    if (question?.role === "user") void onSendMessage(panel.id, question.content, undefined, { retry: true, generalAllowed: true, attachments: question.attachments });
+                  }}>Use general knowledge</button>
+                </div>
+              ) : null}
               {turn.role === "user" && turn.attachments?.length ? (
                 <AttachmentChips attachments={turn.attachments} pageLabel={pageLabel} />
               ) : null}
@@ -652,7 +687,7 @@ export default function DivePanelPane({
                     <button
                       type="button"
                       className="answer-more"
-                      onClick={() => void send(MORE_DETAIL_MESSAGE, { reuseSources: true })}
+                      onClick={() => void send(MORE_DETAIL_MESSAGE)}
                     >
                       More detail
                     </button>
@@ -695,6 +730,7 @@ export default function DivePanelPane({
                 <ThinkingIndicator />
               </span>
             )}
+            <button type="button" className="answer-more" onClick={() => onCancel(panel.id)}>Stop</button>
           </div>
         ) : null}
       </div>

@@ -79,14 +79,15 @@ export function appendTurn(
   panel: DivePanel,
   role: DiveTurn["role"],
   content: string,
-  extra: Pick<DiveTurn, "sources" | "attachments" | "suggestions" | "diagram"> = {},
+  extra: Pick<DiveTurn, "sources" | "attachments" | "suggestions" | "diagram" | "status" | "error"> = {},
 ): DivePanel {
-  const { sources, attachments, suggestions, diagram } = extra;
+  const { sources, attachments, suggestions, diagram, status, error } = extra;
   return {
     ...panel,
     turns: [
       ...panel.turns,
       {
+        id: crypto.randomUUID(),
         role,
         content,
         at: new Date().toISOString(),
@@ -94,6 +95,8 @@ export function appendTurn(
         ...(attachments?.length ? { attachments } : {}),
         ...(suggestions?.length ? { suggestions } : {}),
         ...(diagram ? { diagram } : {}),
+        ...(status ? { status } : {}),
+        ...(error ? { error } : {}),
       },
     ],
   };
@@ -161,7 +164,18 @@ export function treeOf(panels: DivePanel[], rootId: string): { panel: DivePanel;
 // exchanges — and with keepOpeningAnswer, the dive's first exchange too,
 // which later questions usually refer back to.
 export function historyTurns(turns: DiveTurn[], historyTurns: number, keepOpening: boolean): DiveTurn[] {
-  const first = Math.max(0, turns.length - 1 - historyTurns);
-  const recent = turns.slice(first);
-  return keepOpening && first >= 2 ? [turns[0], turns[1], ...recent] : recent;
+  const complete: DiveTurn[] = [];
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    if (turn.role !== "user") continue;
+    const answer = turns[i + 1];
+    if (!answer) { complete.push(turn); continue; }
+    if (answer.role === "assistant" && !answer.status && !answer.content.startsWith("⚠️")) {
+      complete.push(turn, answer);
+      i++;
+    }
+  }
+  const first = Math.max(0, complete.length - 1 - historyTurns);
+  const recent = complete.slice(first);
+  return keepOpening && first >= 2 ? [complete[0], complete[1], ...recent] : recent;
 }

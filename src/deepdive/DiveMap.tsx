@@ -46,6 +46,7 @@ export default function DiveMap({
                   <button
                     type="button"
                     className={`dive-map-item${panel.id === focusId ? " current" : ""}`}
+                    aria-current={panel.id === focusId ? "page" : undefined}
                     onClick={() => {
                       onFocus(panel.id);
                       popover.setOpen(false);

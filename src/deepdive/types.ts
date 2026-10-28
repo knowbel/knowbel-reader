@@ -3,6 +3,7 @@ import type { SourceRef } from "../grounding/types.ts";
 import type { DiveSuggestion } from "./suggestions.ts";
 
 export interface DiveTurn {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   at: string; // ISO timestamp
@@ -15,6 +16,8 @@ export interface DiveTurn {
   // Set only by the Deep Dive experiments (experiments.ts):
   suggestions?: DiveSuggestion[]; // on an answer: where to go next (suggestions)
   diagram?: boolean; // on a reader's turn: it asked for a diagram (diagrams)
+  status?: "error" | "cancelled";
+  error?: string;
 }
 
 export interface DiveImage {
@@ -41,6 +44,7 @@ export interface DivePanel {
   // Set only by the Deep Dive experiments (experiments.ts):
   region?: RegionRect; // area dives: the region selected (areaContext)
   baseSources?: SourceRef[]; // the first answer's sources, kept for follow-ups (stableSources)
+  sourceRegistry?: SourceRef[];
   summary?: DiveTreeSummary; // root dives: a summary of the whole tree (treeSummary)
 }
 
@@ -50,6 +54,20 @@ export interface DiveTreeSummary {
   sources: SourceRef[];
   at: string; // ISO timestamp
   turnCount: number; // answers in the tree when it was made — more since means it's out of date
+  revision?: string;
+}
+
+export interface DiveJobState {
+  phase: "preparing" | "streaming";
+  text: string;
+  sources?: SourceRef[];
+}
+
+export interface SummaryJobState {
+  phase: "streaming" | "error" | "cancelled";
+  text: string;
+  sources: SourceRef[];
+  error?: string;
 }
 
 export interface Pin {

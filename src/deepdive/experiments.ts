@@ -48,6 +48,16 @@ export const DEFAULT_EXPERIMENTS: DiveExperiments = {
   treeSummary: false,
 };
 
+// The reader-facing experience. Experimental controls can still override
+// these in development without changing the defaults used by older evals.
+export const PRODUCTION_EXPERIMENTS: DiveExperiments = {
+  ...DEFAULT_EXPERIMENTS,
+  localWindow: true, linkedSources: true, rankingPriors: true,
+  areaContext: true, nestedContext: true, stableSources: true,
+  orientationFirst: true, keepOpeningAnswer: true, suggestions: true,
+  rootAnchor: true, diveMap: true, treeSummary: true,
+};
+
 // What the settings menu shows, in groups.
 export const EXPERIMENT_GROUPS: { title: string; items: { key: DiveExperimentKey; label: string; hint: string }[] }[] = [
   {
@@ -87,7 +97,8 @@ export function contextStrategy(experiments: DiveExperiments): DiveContextStrate
   return { localWindow, linkedSources, rankingPriors, areaContext, nestedContext };
 }
 
-const STORAGE_KEY = "knowbelreader-dive-experiments";
+const STORAGE_KEY = "knowbelreader-dive-experiments-v2";
+const OLD_STORAGE_KEY = "knowbelreader-dive-experiments";
 
 // Unknown keys are dropped and missing ones take their default, so a flag
 // added or removed later never breaks what was saved.
@@ -112,15 +123,22 @@ const listeners = new Set<() => void>();
 // that switches them isn't shown there, so a saved choice couldn't be undone.
 // What was saved is left alone for the next time dev mode is on.
 export function getExperiments(): DiveExperiments {
-  if (!DEV_MODE) return DEFAULT_EXPERIMENTS;
+  if (!DEV_MODE) return PRODUCTION_EXPERIMENTS;
   if (!current) {
     let raw: string | null = null;
     try {
       raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        const old = localStorage.getItem(OLD_STORAGE_KEY);
+        if (old) {
+          const previous = parseExperiments(old);
+          current = { ...PRODUCTION_EXPERIMENTS, readerNotes: previous.readerNotes, diagrams: previous.diagrams };
+        }
+      }
     } catch {
       // Storage unavailable: defaults.
     }
-    current = parseExperiments(raw);
+    current ??= raw ? parseExperiments(raw) : PRODUCTION_EXPERIMENTS;
   }
   return current;
 }

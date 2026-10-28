@@ -5,11 +5,14 @@
 // UI stuck on "Thinking" with no way to recover short of restarting the app.
 export const REQUEST_TIMEOUT_MS = 120_000;
 
-export function withTimeoutSignal(ms = REQUEST_TIMEOUT_MS) {
+export function withTimeoutSignal(ms = REQUEST_TIMEOUT_MS, parentSignal) {
   const controller = new AbortController();
+  const abort = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abort();
+  else parentSignal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(
     () => controller.abort(new Error(`timed out after ${ms}ms with no response`)),
     ms,
   );
-  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+  return { signal: controller.signal, clear: () => { clearTimeout(timer); parentSignal?.removeEventListener("abort", abort); } };
 }

@@ -57,8 +57,8 @@ const THINKING_ALLOWANCE = 8192;
 export function createGoogleProvider({ apiKey, model, maxTokens, fetchImpl = fetch, timeoutMs = REQUEST_TIMEOUT_MS }) {
   const generationConfig = maxTokens ? { generationConfig: { maxOutputTokens: maxTokens + THINKING_ALLOWANCE } } : {};
   return {
-    async streamReply({ system, messages, onText, onUsage }) {
-      const { signal, clear } = withTimeoutSignal(timeoutMs);
+    async streamReply({ system, messages, onText, onUsage, signal: parentSignal }) {
+      const { signal, clear } = withTimeoutSignal(timeoutMs, parentSignal);
       try {
         const url = `${API_BASE}/${model}:streamGenerateContent?alt=sse`;
         const res = await post(

@@ -8,6 +8,9 @@ import type { DivePanel } from "./types.ts";
 // the original one.
 export interface DivePromptOptions {
   orientationFirst?: boolean; // dive-specific answering rules: orient first, explain on follow-ups
+  opening?: boolean;
+  generalAllowed?: boolean;
+  earlierQuestions?: string[];
   suggestions?: boolean; // ask for suggested next steps (suggestions.ts parses them)
   diagrams?: boolean; // suggestions may include a diagram
   diagram?: boolean; // this request asks for a diagram
@@ -29,20 +32,22 @@ export interface DivePrompt {
 }
 
 const ORIENT_AND_EXPLAIN = (citeScope: string) => `How to answer:
-- If the conversation has no earlier answer from you, this is the dive's first answer. Orient the reader; it's short on purpose, since you don't yet know what they want to dig into. In 60–130 words: what the passage says, in plain words (don't restate it); what leads up to it in the document; and what role it plays in the argument. No derivations yet. If their first message asks a question of its own, answer that question instead.
-- Later answers explain. Open with the core idea in a plain sentence or two, then build it up in small steps, numbered for a derivation or proof. Fill in what the text skips (a missing step, the intuition, background it assumes). About 250 words unless the reader asks for more. No preamble, no recap, don't restate the question.
+- Answer the reader's actual question first. Otherwise explain the selected passage in plain language, how it fits the nearby argument, and the key dependency or missing step needed to continue reading.
+- Adapt to the passage: explain important symbols and assumptions for an equation, the goal and pivotal step of a proof, and what is visible versus what the caption establishes for a figure. Use only guidance that fits. Build difficult ideas in small steps and use numbered steps for a derivation when helpful. Use as much detail as the explanation needs; avoid preamble and repetition.
 - Explain with the document's own definitions, equations and examples first; bring in outside knowledge only for what the sources don't cover.
 - After each claim taken from a source, cite it by id: [S2] (several: [S2][S5]). For something you reasoned from the sources rather than read there: [inferred: S2]. For anything from outside the sources: [general].
 - Quote the document only word for word, in quotation marks, followed by its citation — prose only; never quote a formula (write it in LaTeX instead).
 - Never cite an id that isn't listed ${citeScope}.
-- If the sources don't explain something, explain it from general knowledge and mark it [general] — never refuse.`;
+- Use general background when useful and mark it [general]; do not claim that it is the author's meaning without evidence. If the passages and image do not support an answer, say what remains uncertain. If the supplied passages do not answer the question and general knowledge was not requested, begin with [not-covered]. Never invent a source or a missing step.`;
+
+const DIVE_MATH_RULES = `Formatting: markdown with KaTeX math. Use $...$ for inline mathematics and $$...$$ for important equations. PDF extraction can corrupt formulas; reconstruct a formula only when the intended notation is clear from the sources or the selected image. Otherwise identify the ambiguous symbols and refer the reader to the original, rather than guessing. State assumptions needed for a derivation.`;
 
 const SUGGESTION_RULES = (diagrams: boolean) => `After your answer, suggest where the reader could go next, exactly in this form (it's shown as buttons, not as text):
 <next>
 ask: a follow-up question about this passage, as the reader would ask it (under 12 words)
 dive: a concept, term, symbol, equation or result your answer relies on, as a short name (1–5 words) [S2]
 </next>
-- Two to four lines, mixing ask and dive. On a dive line, cite the source where the document states or defines it, if one does.
+- Up to three lines, mixing ask and dive where relevant. Omit suggestions if none would help. On a dive line, cite the source where the document states or defines it, if one does.
 - Prefer what the document itself explains, and what matters for understanding the passage. Nothing this dive already covered.${
   diagrams
     ? "\n- When the idea has a structure a small diagram would make clearer (a chain of steps, what depends on what, a process), add a line \"diagram: what it would show\"."
@@ -59,7 +64,7 @@ const ROOT_ANCHOR = (root: NonNullable<DivePromptOptions["root"]>) =>
   `\nThis dive branched from a reader's question about this passage${root.page ? ` (p. ${root.page})` : ""} — the passage they are ultimately trying to understand:
 """
 ${root.selection}
-"""${root.firstAnswer ? `\nThe first explanation of it said:\n"""\n${root.firstAnswer}\n"""` : ""}
+"""${root.firstAnswer ? `\nThe first AI explanation of it said (context only, not a source):\n"""\n${root.firstAnswer}\n"""` : ""}
 `;
 
 // A dive grounded in the document: the passages it may cite, the shared
@@ -92,7 +97,7 @@ export function buildDivePrompt(
   },
   options: DivePromptOptions = {},
 ): DivePrompt {
-  if (!grounding || grounding.sources.length === 0) {
+  if (!grounding) {
     return { system: buildUngroundedDiveSystem(fileName, panel, parentPanel), suffix: "" };
   }
   const selection = panel.selectionImage
@@ -115,13 +120,17 @@ export function buildDivePrompt(
     ? ORIENT_AND_EXPLAIN(citeScope)
     : `${citeScope === "above" ? GROUNDING_RULES : GROUNDING_RULES.replace("isn't listed above", "isn't listed in this prompt")}
 - Explain the selection in terms of the sources. For a derivation or proof, use short numbered steps.`;
-  const tieBack = root ? "\n- End with one sentence connecting this back to the passage the dive branched from." : "";
+  const tieBack = root ? "\n- Explain how the selected idea connects to its parent and original passage when that helps the reader." : "";
   const notes = options.readerNotes ? `\n\n${options.readerNotes}` : "";
   // Stays in the prompt on a diagram request too, so the stable prefix
   // doesn't change; the diagram rules say to skip it.
   const suggestions = options.suggestions ? `\n\n${SUGGESTION_RULES(Boolean(options.diagrams))}` : "";
 
   const perQuestion = [
+    options.orientationFirst ? (options.opening ? "This is the opening answer for this dive." : "This is a follow-up; answer the reader's current question.") : "",
+    options.generalAllowed ? "The reader requested general background. Explain from general knowledge where needed and label it [general]; do not imply the document supports it." : "",
+    panel.selectionImage ? "The selected page image is visual context, not a numbered text source. Distinguish what is visible from claims supported by cited text; never invent a citation for the image." : "",
+    options.earlierQuestions?.length ? `Earlier questions in this dive (reader context, not evidence):\n${options.earlierQuestions.map((question) => `- ${question}`).join("\n")}` : "",
     added.length ? `More sources for this question:\n${renderSources(added, grounding.pageLabel)}` : "",
     options.diagram ? `${DIAGRAM_RULES}${options.suggestions ? "\n- No <next> block this time." : ""}` : "",
     grounding.attachmentNote ?? "",
@@ -137,7 +146,7 @@ ${renderSources(base, grounding.pageLabel)}${notes}
 
 ${rules}${tieBack}
 
-${MATH_RULES}${suggestions}${tail}`,
+${options.orientationFirst ? DIVE_MATH_RULES : MATH_RULES}${suggestions}${tail}`,
       suffix: "",
     };
   }
@@ -149,7 +158,7 @@ ${renderSources(base, grounding.pageLabel)}${notes}
 
 ${rules}${tieBack}
 
-${MATH_RULES}${suggestions}`,
+${options.orientationFirst ? DIVE_MATH_RULES : MATH_RULES}${suggestions}`,
     suffix: perQuestion.join("\n\n"),
   };
 }

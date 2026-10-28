@@ -44,6 +44,7 @@ async function postSse(
   const decoder = new TextDecoder();
   let buffer = "";
   let full = "";
+  let completed = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -58,6 +59,7 @@ async function postSse(
       const data = JSON.parse(line.slice(6));
       if (data.error) throw new Error(data.error);
       if (data.done) {
+        completed = true;
         full = data.text ?? full;
       } else if (typeof data.text === "string") {
         full += data.text;
@@ -66,6 +68,7 @@ async function postSse(
     }
   }
 
+  if (!completed) throw new Error("The response was interrupted before it finished. Please retry.");
   return full;
 }
 
@@ -74,11 +77,13 @@ export function streamDiveReply(params: {
   systemSuffix?: string; // the per-question part, sent apart so `system` can be cached
   messages: DiveMessage[];
   onText: (chunk: string) => void;
+  signal?: AbortSignal;
 }): Promise<string> {
   return postSse(
     "/api/dive/stream",
     { system: params.system, ...(params.systemSuffix ? { systemSuffix: params.systemSuffix } : {}), messages: params.messages },
     params.onText,
+    params.signal,
   );
 }
 

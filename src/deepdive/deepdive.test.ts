@@ -8,11 +8,43 @@ import { DEFAULT_EXPERIMENTS, EXPERIMENT_GROUPS, parseExperiments } from "./expe
 import { buildDivePrompt, buildDiveSystem } from "./prompts.ts";
 import { readerNotesBlock } from "./readerNotes.ts";
 import { hideSuggestionBlock, mergeSuggestions, splitSuggestions, suggestedDiveSources } from "./suggestions.ts";
-import { buildTreeSummaryRequest, treeAnswerCount } from "./summary.ts";
+import { buildTreeSummaryRequest, treeAnswerCount, treeRevision } from "./summary.ts";
+import { labelWithRegistry } from "./sourceRegistry.ts";
+import { abortable } from "./job.ts";
 import { historyTurns, treeOf } from "./tree.ts";
 import type { DivePanel, DiveTurn } from "./types.ts";
 
 const pageLabel = (n: number) => String(n);
+
+test("stopping a request interrupts preparation even when indexing is still pending", async () => {
+  const controller = new AbortController();
+  const work = abortable(new Promise<never>(() => {}), controller.signal);
+  controller.abort();
+  await assert.rejects(work, { name: "AbortError" });
+});
+
+test("source labels remain reserved when passages leave and re-enter a dive", () => {
+  const a = source("S1", 1, "first");
+  const b = source("S2", 2, "second");
+  const c = source("S1", 3, "third");
+  const initial = labelWithRegistry([a, b], []);
+  const next = labelWithRegistry([b, c], initial.registry);
+  const later = labelWithRegistry([a, c], next.registry);
+  assert.deepEqual(next.sources.map((s) => s.label), ["S2", "S3"]);
+  assert.deepEqual(later.sources.map((s) => s.label), ["S1", "S3"]);
+});
+
+test("history excludes incomplete exchanges and summary revisions detect edits", () => {
+  const turns: DiveTurn[] = [
+    { role: "user", content: "first", at: "" }, { role: "assistant", content: "answer", at: "" },
+    { role: "user", content: "failed", at: "" }, { role: "assistant", content: "partial", at: "", status: "error" },
+    { role: "user", content: "current", at: "" },
+  ];
+  assert.deepEqual(historyTurns(turns, 4, true).map((turn) => turn.content), ["first", "answer", "current"]);
+  const root = panel("r", null, "passage", turns);
+  const edited = { ...root, turns: turns.map((turn) => turn.content === "answer" ? { ...turn, content: "changed" } : turn) };
+  assert.notEqual(treeRevision([root], "r"), treeRevision([edited], "r"));
+});
 
 function source(label: string, pageNumber: number, text: string, extra: Partial<SourceRef> = {}): SourceRef {
   // One passage per page in these fixtures, so the page names its chunk.
@@ -120,16 +152,17 @@ test("orientation-first, suggestions, root anchor and reader notes each add thei
   const nested = panel("n", "r", "qubits");
   const system = buildDiveSystem("book.pdf", nested, root, { sources, pageLabel }, {
     orientationFirst: true,
+    opening: true,
     suggestions: true,
     root: { selection: root.selection, page: "3", firstAnswer: "It says entanglement correlates outcomes." },
     readerNotes: "What the reader has noted: …",
   });
-  assert.match(system, /this is the dive's first answer/);
-  assert.match(system, /never refuse/);
-  assert.doesNotMatch(system, /\[not-covered\]/);
+  assert.match(system, /opening answer for this dive/);
+  assert.match(system, /say what remains uncertain/);
+  assert.match(system, /\[not-covered\]/);
   assert.match(system, /<next>/);
   assert.match(system, /branched from a reader's question about this passage \(p\. 3\)/);
-  assert.match(system, /connecting this back to the passage/);
+  assert.match(system, /connects to its parent and original passage/);
   assert.match(system, /What the reader has noted/);
   // A root dive gets no anchor, even when one is passed.
   const rootSystem = buildDiveSystem("book.pdf", root, null, { sources, pageLabel }, { root: { selection: "x" } });
@@ -288,9 +321,9 @@ test("the tree summary renumbers every answer's citations into one shared list",
   assert.match(prompt, /It correlates outcomes \[S1\], as in a Bell state \[S2\]\./);
   // The child's own S1/S2 became the shared S2/S3.
   assert.match(prompt, /Maximally entangled \[S2\]; measuring one collapses both \[inferred: S3\]\./);
-  // The canned opening and failed replies are left out; real questions stay.
+  // The canned opening and failed exchanges are left out.
   assert.doesNotMatch(prompt, /I'd like to dive deeper|⚠️/);
-  assert.match(prompt, /Reader: Why is it not classical\?/);
+  assert.doesNotMatch(prompt, /Reader: Why is it not classical\?/);
   assert.match(system, /Entanglement links two qubits/);
   assert.match(system, /<source id="S3" p="8">/);
   assert.equal(treeAnswerCount(panels, "r"), 2);

@@ -74,7 +74,7 @@ export async function prepareDiveSources(
   ctx: DiveRequestContext,
   panel: DivePanel,
   content: string,
-  options: { reuse: boolean; attachments: Attachment[] },
+  options: { reuse: boolean; attachments: Attachment[]; wider?: boolean },
 ): Promise<{ sources: SourceRef[]; splitAt?: number } | undefined> {
   const x = ctx.experiments;
   if (options.reuse) {
@@ -116,14 +116,14 @@ export async function prepareDiveSources(
       rootPage,
     };
     const isFirstMessage = panel.turns.length === 0;
-    if (x.stableSources && !isFirstMessage && panel.baseSources?.length) {
+    if (x.stableSources && !isFirstMessage && panel.baseSources?.length && !options.wider) {
       const { sources } = buildFollowUpSources(
         { ...input, base: panel.baseSources, question: content, leansOnSelection: isFollowUp(content) },
         strategy,
       );
       return { sources, splitAt: panel.baseSources.length };
     }
-    const sources = buildDiveSources({ ...input, question: isFirstMessage ? undefined : content }, undefined, strategy);
+    const sources = buildDiveSources({ ...input, question: isFirstMessage ? undefined : content }, options.wider ? { typicalChars: 12000, ceilingChars: 40000 } : undefined, strategy);
     return { sources, splitAt: x.stableSources ? sources.length : undefined };
   } catch {
     return undefined;
@@ -191,6 +191,7 @@ export function divePromptOptions(
   }
   return {
     ...(x.orientationFirst ? { orientationFirst: true } : {}),
+    ...(x.orientationFirst ? { opening: panel.turns.filter((turn) => turn.role === "user").length === 1 } : {}),
     ...(x.suggestions ? { suggestions: true } : {}),
     ...(x.diagrams ? { diagrams: true } : {}),
     ...(options.diagram ? { diagram: true } : {}),

@@ -16,6 +16,7 @@ export interface DiveSuggestion {
 }
 
 const MAX_SUGGESTIONS = 5;
+const MAX_SHOWN = 3;
 const MAX_FROM_CONTEXT = 2;
 
 const LINE = /^\s*[-*•]?\s*(ask|dive|diagram)\s*:\s*(.+?)\s*$/i;
@@ -69,7 +70,14 @@ function topicOf(source: SourceRef): string | null {
 // The model's suggestions, then up to two dive topics found in the dive's
 // own sources (what the selection names) that it didn't already suggest.
 export function mergeSuggestions(fromModel: DiveSuggestion[], sources: SourceRef[] | undefined): DiveSuggestion[] {
-  const seen = new Set(fromModel.map((suggestion) => suggestion.text.toLowerCase()));
+  const seen = new Set<string>();
+  const valid = fromModel.filter((suggestion) => {
+    const key = suggestion.text.trim().toLowerCase();
+    if (!key || seen.has(key) || suggestion.text.length > 100) return false;
+    if (suggestion.sourceLabel && !sources?.some((source) => source.label === suggestion.sourceLabel)) return false;
+    seen.add(key);
+    return true;
+  });
   const extra: DiveSuggestion[] = [];
   for (const source of sources ?? []) {
     if (extra.length >= MAX_FROM_CONTEXT) break;
@@ -79,7 +87,7 @@ export function mergeSuggestions(fromModel: DiveSuggestion[], sources: SourceRef
     seen.add(topic.toLowerCase());
     extra.push({ kind: "dive", text: topic, sourceLabel: source.label, fromContext: true });
   }
-  return [...fromModel, ...extra].slice(0, MAX_SUGGESTIONS);
+  return [...valid, ...extra].slice(0, MAX_SHOWN);
 }
 
 // The panel a suggested dive would open, for resolving its sources ahead

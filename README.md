@@ -68,8 +68,11 @@ and Linux, but those builds haven't been tried yet.
 ### AI study tools
 - **Deep Dive**: select text or a region of a page and get an explanation
   that draws on the surrounding text and related passages elsewhere in the
-  document. You can ask follow-ups or dive deeper into a phrase in the answer,
-  building a tree of nested dives.
+  document. Answers stream as they arrive, and can be stopped or retried. Ask
+  follow-ups or dive deeper into a phrase in an answer to build a tree of nested
+  dives; use the map to navigate it and the optional summary to synthesize it.
+  If the passages found do not answer a question, you can search more widely or
+  ask for general background.
 - **Ask** (**⌘J**): ask questions about the whole document, a chapter, or a
   page range ("what does section 3.2 prove?"). Only the relevant passages are
   sent to the model, and you can attach text or page regions to a question.

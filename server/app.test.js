@@ -99,6 +99,30 @@ test("POST /api/dive/stream sends an error frame instead of crashing when the mo
   });
 });
 
+test("closing a dive stream aborts the provider request", async () => {
+  let notifyAbort;
+  const aborted = new Promise((resolve) => { notifyAbort = resolve; });
+  const models = {
+    async streamDiveReply({ onText, signal }) {
+      onText("Started");
+      await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+      notifyAbort();
+      return "";
+    },
+  };
+  await withServer(models, async (base) => {
+    const controller = new AbortController();
+    const res = await fetch(`${base}/api/dive/stream`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ system: "S", messages: [{ role: "user", content: "hi" }] }),
+      signal: controller.signal,
+    });
+    await res.body.getReader().read();
+    controller.abort();
+    await Promise.race([aborted, new Promise((_, reject) => setTimeout(() => reject(new Error("Provider was not stopped")), 1000))]);
+  });
+});
+
 test("POST /api/dive/quick requires system and prompt", async () => {
   await withServer(fakeModels, async (base) => {
     const res = await fetch(`${base}/api/dive/quick`, {
