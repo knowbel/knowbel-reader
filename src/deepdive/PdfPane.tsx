@@ -19,6 +19,7 @@ import GlossaryMarks from "../glossary/GlossaryMarks";
 import XrefMarks, { type XrefBindings } from "../xref/XrefMarks";
 import FigureMarks from "../figures/FigureMarks";
 import type { HighlightPen, Tool } from "../components/AppRail";
+import { retryScrollRestoration } from "../navigation/scrollRestoration";
 
 export type PdfSource = string | Uint8Array;
 
@@ -213,53 +214,21 @@ export default function PdfPane({
   // land well short of the target and get reported as "done" anyway.
   // Re-issuing the same scroll command ourselves over a longer window gives
   // pdf.js time to finish measuring the intervening pages and self-correct
-  // on a later call — cheap and harmless once we're already on the right
-  // page, since re-scrolling to the current page is a no-op.
+  // on a later call. These retries must stop on user input, including
+  // scrolling within the opening page, or they pull the reader back.
   useEffect(() => {
-    // scrollToHighlightAtMount's own effect below already lands on (and
-    // keeps correcting toward) the right page as part of scrolling to the
-    // exact highlight — running this plain page-restore alongside it would
-    // just fight over the scroll position on every retry tick.
-    if (scrollToHighlightAtMount) return;
-    if (!initialPageAtMount || initialPageAtMount <= 1) return;
-    let cancelled = false;
-    const timeouts = [500, 1200, 2200, 3500, 5000, 7000].map((delay) =>
-      window.setTimeout(() => {
-        if (cancelled) return;
-        try {
-          highlighterUtilsRef.current?.getViewer()?.scrollPageIntoView({ pageNumber: initialPageAtMount });
-        } catch {
-          // best-effort correction; nothing to do if it throws
-        }
-      }, delay),
-    );
-    return () => {
-      cancelled = true;
-      timeouts.forEach(window.clearTimeout);
-    };
+    const container = viewerContainerRef.current;
+    if (!container || (!scrollToHighlightAtMount && (!initialPageAtMount || initialPageAtMount <= 1))) return;
+    return retryScrollRestoration(container, () => {
+      // A highlight includes an exact location and takes priority over a
+      // plain page restore, so the two targets never fight each other.
+      if (scrollToHighlightAtMount) {
+        highlighterUtilsRef.current?.scrollToHighlight(scrollToHighlightAtMount);
+      } else {
+        highlighterUtilsRef.current?.getViewer()?.scrollPageIntoView({ pageNumber: initialPageAtMount! });
+      }
+    });
   }, [initialPageAtMount, scrollToHighlightAtMount]);
-
-  // Same settling problem as the page-restore above, applied to scrolling
-  // precisely to a highlight (e.g. the point in the main text a dive
-  // annotation traces back to) instead of just its page.
-  useEffect(() => {
-    if (!scrollToHighlightAtMount) return;
-    let cancelled = false;
-    const timeouts = [500, 1200, 2200, 3500, 5000, 7000].map((delay) =>
-      window.setTimeout(() => {
-        if (cancelled) return;
-        try {
-          highlighterUtilsRef.current?.scrollToHighlight(scrollToHighlightAtMount);
-        } catch {
-          // best-effort correction; nothing to do if it throws
-        }
-      }, delay),
-    );
-    return () => {
-      cancelled = true;
-      timeouts.forEach(window.clearTimeout);
-    };
-  }, [scrollToHighlightAtMount]);
 
   return (
     <div
@@ -369,7 +338,7 @@ export default function PdfPane({
                 areaSelectionMode={areaMode}
                 enableFreetextCreation={() => freetextMode}
                 onFreetextClick={onFreetextClick}
-                initialPage={initialPage}
+                initialPage={initialPageAtMount}
                 onPageChange={onPageChange}
                 pdfScaleValue={pdfScaleValue}
                 onZoomChange={onZoomChange}
