@@ -61,6 +61,14 @@ pages; no PDF geometry is fabricated. Native sources and glossary references
 persist a semantic `location` and section `locationLabel`. Native page-number
 scopes are disabled. Citation chips, previews and history use section labels.
 
+`navigation/ReaderNavigator.tsx` owns the floating bottom-center navigation,
+idle fade, scroll/hover/keyboard reveal, selection-drag hiding and jump-history
+menu for both readers. `PageNavigator` supplies PDF page controls;
+`SectionNavigator` supplies native heading selection and previous/next sections.
+Both support **⌥⌘G** to focus their location control and **⌘← / ⌘→** to retrace
+jumps. Native history retains semantic anchors, including when skipping several
+history entries; section navigation never exposes internal text-unit numbers.
+
 Native Deep Dives use the existing streaming API and persist as study threads,
 including follow-ups and nested dives from answers. PDF's multi-pane dive tree
 remains in the PDF reader. Images use the shared image-attachment path only

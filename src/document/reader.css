@@ -1,9 +1,5 @@
 .reader-loading { padding: 2rem; display: flex; align-items: center; gap: 1rem; }
-.flow-header { display: flex; gap: 1rem; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 0.85rem; }
-.flow-header > span { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
-.flow-header > span:first-of-type { flex: 1; font-weight: bold; }
-.flow-header > span:nth-of-type(2) { max-width: 40%; color: var(--muted); }
-.flow-header button { color: var(--text); }
+.flow-pane { position: relative; }
 .flow-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--bg); scrollbar-gutter: stable; }
 .flow-document { max-width: 820px; padding: 2.5rem 3rem 40vh; margin: 0 auto; line-height: 1.75; overflow-wrap: anywhere; }
 .flow-block { content-visibility: auto; contain-intrinsic-size: auto 80px; scroll-margin-top: 2rem; }
@@ -58,5 +54,4 @@
 .flow-return-to-passage { margin: 8px 16px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--link); }
 @media (max-width: 760px) {
   .flow-document { padding: 1.5rem 1.25rem 40vh; }
-  .flow-header > span:nth-of-type(2) { display: none; }
 }

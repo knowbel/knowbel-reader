@@ -108,6 +108,50 @@ const source='# Native Study\n\nA qubit stores quantum information. Repeat targe
 await upload(source);
 await wait("!!document.querySelector('.native-reader .flow-document h1')");
 assert.equal(await evaluate("document.querySelector('.flow-document h1').textContent"),'Native Study');
+// Both formats share the floating navigator, reveal rules, and jump history.
+await wait("!!document.querySelector('.page-nav select[aria-label=\"Section\"]')");
+assert.equal(await evaluate("document.querySelectorAll('.flow-header').length"),0);
+assert.deepEqual(await evaluate("[...document.querySelector('.page-nav-section').options].map(option=>option.textContent)"),['Native Study','Methods','Results']);
+await evaluate(`window.__navigatorStyle = () => {
+  const nav=document.querySelector('.page-nav'), pane=nav.parentElement;
+  const box=nav.getBoundingClientRect(), bounds=pane.getBoundingClientRect(), style=getComputedStyle(nav);
+  return { centered:Math.abs((box.left+box.right)/2-(bounds.left+bounds.right)/2)<1,
+    bottom:Math.round(bounds.bottom-box.bottom),radius:style.borderRadius,background:style.backgroundColor };
+};`);
+const nativeNavigationUi=await evaluate('window.__navigatorStyle()');
+assert.ok(nativeNavigationUi.centered);
+assert.equal(nativeNavigationUi.bottom,20);
+await click('.page-nav button[aria-label="Next section"]');
+await wait("document.querySelector('.page-nav-section').selectedOptions[0].textContent==='Methods'");
+await click('.page-nav button[aria-label="Next section"]');
+await wait("document.querySelector('.page-nav-section').selectedOptions[0].textContent==='Results'");
+await click('.page-nav button[aria-label="Previous section"]');
+await wait("document.querySelector('.page-nav-section').selectedOptions[0].textContent==='Methods'");
+await click('.page-nav button[aria-haspopup="menu"]');
+await wait("document.querySelectorAll('.page-nav-menu button').length>=3");
+// A multi-step jump preserves the skipped entries in Forward.
+await evaluate("document.querySelector('.page-nav-menu button:last-child').click()");
+await wait("document.querySelector('.page-nav-section').selectedOptions[0].textContent==='Native Study'");
+await click('.page-nav button[aria-label^="Forward to "]');
+await wait("document.querySelector('.page-nav-section').selectedOptions[0].textContent==='Methods'");
+await evaluate("const section=document.querySelector('.page-nav-section');section.value='0';section.dispatchEvent(new Event('change',{bubbles:true}));document.activeElement?.blur()");
+await wait("document.querySelector('.page-nav-section').selectedOptions[0].textContent==='Native Study'");
+assert.ok(await evaluate("document.querySelector('.page-nav button[aria-label=\"Forward\"]').disabled"),'a new section jump clears Forward');
+await wait("!document.querySelector('.page-nav--visible')",'navigator fades while idle');
+await evaluate("const nav=document.querySelector('.page-nav'),rect=nav.getBoundingClientRect();nav.parentElement.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,clientX:rect.left+5,clientY:rect.top+5}))");
+await wait("!!document.querySelector('.page-nav--visible')",'pointer proximity reveals navigator');
+await evaluate("document.querySelector('.flow-pane').dispatchEvent(new MouseEvent('mouseleave'))");
+await send('Input.dispatchKeyEvent',{type:'keyDown',key:'g',code:'KeyG',modifiers:5});
+await send('Input.dispatchKeyEvent',{type:'keyUp',key:'g',code:'KeyG',modifiers:5});
+await wait("document.activeElement===document.querySelector('.page-nav-section')");
+await new Promise(resolve=>setTimeout(resolve,1700));
+assert.ok(await evaluate("!!document.querySelector('.page-nav--visible')"),'keyboard focus keeps navigation visible');
+await evaluate("document.activeElement.blur();document.querySelector('.flow-scroll').dispatchEvent(new Event('scroll'))");
+await wait("!!document.querySelector('.page-nav--visible')",'scroll reveals navigator');
+await evaluate("document.querySelector('.flow-document').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))");
+await wait("!document.querySelector('.page-nav--visible')",'selection drag hides navigator');
+await evaluate("window.dispatchEvent(new PointerEvent('pointerup',{button:0}))");
+
 assert.equal(await evaluate("document.querySelectorAll('.flow-document table').length"),1);
 await wait("!!document.querySelector('.flow-document .katex')");
 await select('Repeat target',1);
@@ -152,7 +196,7 @@ await wait("window.__copiedAnnotations?.includes('Shared document note')");
 assert.ok(await evaluate("window.__copiedAnnotations.includes('Remember this passage') && window.__copiedAnnotations.includes('Shared highlight note') && !window.__copiedAnnotations.includes('p. ')") , 'native export uses section labels');
 await click('.annot-card--highlight button[aria-label="Delete"]');
 await wait("!document.querySelector('.annot-card--highlight')");
-await click('.flow-header');
+await click('.flow-pane');
 await evaluate('document.activeElement?.blur()');
 await send('Input.dispatchKeyEvent',{type:'keyDown',key:'z',code:'KeyZ',modifiers:4});
 await send('Input.dispatchKeyEvent',{type:'keyUp',key:'z',code:'KeyZ',modifiers:4});
@@ -171,7 +215,7 @@ await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].fin
 await wait("!!document.querySelector('.glossary-card')");
 await wait("!!document.querySelector('.flow-mark--glossary')");
 await wait("document.querySelector('.glossary-card')?.textContent.includes('A quantum bit stores quantum information.')");
-await click('.flow-header');
+await click('.flow-pane');
 await select('qubit');
 await evaluate("document.querySelector('.dive-selection-tip button[title*=Dive],.dive-selection-tip .dive-control button')?.click()");
 // Select the actual Deep Dive control using its accessible tooltip if its class changes.
@@ -184,9 +228,9 @@ assert.ok((await evaluate("document.querySelector('.cite-chip').dataset.label"))
 assert.ok(!/^p\./.test(await evaluate("document.querySelector('.cite-chip').dataset.label")));
 await click('.cite-chip');
 await wait("!!document.querySelector('.flow-mark--flash')");
-await wait("!document.querySelector('button[aria-label=\"Back\"]').disabled");
-await click('button[aria-label="Back"]');
-await wait("!document.querySelector('button[aria-label=\"Forward\"]').disabled");
+await wait("!document.querySelector('button[aria-label^=\"Back to \"]').disabled");
+await click('.page-nav button[aria-label^="Back to "]');
+await wait("!document.querySelector('button[aria-label^=\"Forward to \"]').disabled");
 await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
 await click('.library-card-open');
@@ -241,9 +285,24 @@ await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
 const pdf=await PDFDocument.create();pdf.setTitle('PDF Regression');
 const font=await pdf.embedFont(StandardFonts.Helvetica);
-pdf.addPage([400,600]).drawText('PDF smoke test',{x:40,y:550,size:18,font});
+for(let page=1;page<=3;page++) pdf.addPage([400,600]).drawText(page===1?'PDF smoke test':`PDF page ${page}`,{x:40,y:550,size:18,font});
 await upload(Array.from(await pdf.save()),'Regression.pdf','application/pdf');
 await wait("!!document.querySelector('.PdfHighlighter .page[data-page-number=\"1\"]')");
+assert.deepEqual(await evaluate('window.__navigatorStyle()'),nativeNavigationUi,'PDF and Markdown share navigator positioning and appearance');
+await send('Input.dispatchKeyEvent',{type:'keyDown',key:'g',code:'KeyG',modifiers:5});
+await send('Input.dispatchKeyEvent',{type:'keyUp',key:'g',code:'KeyG',modifiers:5});
+await wait("document.activeElement===document.querySelector('.page-nav-input')");
+await send('Input.insertText',{text:'2'});
+await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
+await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
+await wait("document.querySelector('.page-nav-input').value==='2'");
+await click('.page-nav button[aria-label="Next page"]');
+await wait("document.querySelector('.page-nav-input').value==='3'");
+await click('.page-nav button[aria-label="Previous page"]');
+await wait("document.querySelector('.page-nav-input').value==='2'");
+await click('.page-nav button[aria-label^="Back to p. 1"]');
+await wait("document.querySelector('.page-nav-input').value==='1'");
+
 await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
 await evaluate(`(async () => {

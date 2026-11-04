@@ -6,6 +6,7 @@ import { DocDataWriter } from "../storage/docDataWriter";
 import type { DocumentMeta } from "../storage/types";
 import { DOCUMENT_FILE_ACCEPT, parseDocument, releaseDocument } from "./registry";
 import { DocumentEngine } from "./engine";
+import SectionNavigator from "../navigation/SectionNavigator";
 import type { DocumentAnnotation, FlowAnchor, TextPoint } from "./model";
 import { anchorLabel, anchorText, sameAnchor, textAnchor } from "./anchors";
 import FlowView, { type FlowSelection, type FlowGlossaryMark } from "./FlowView";
@@ -126,6 +127,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   const [openThreadId, setOpenThreadId] = useState<string | null>(session.meta.view?.threadId ?? null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [currentUnit, setCurrentUnit] = useState(1);
+  const [navigationFocusRequest, setNavigationFocusRequest] = useState(0);
   const [navigate, setNavigate] = useState<{ anchor: FlowAnchor; sequence: number } | null>(() => {
     const point = session.meta.readingPosition;
     const block = point && model.blocks.find((block) => block.id === point.blockId);
@@ -235,11 +237,14 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     updateHistory((n) => n + 1);
     displayAnchor(anchor);
   });
-  const goHistory = useEvent((direction: "back" | "forward") => {
-    const target = history.current[direction].pop();
-    if (!target) return;
+  const goHistory = useEvent((direction: "back" | "forward", steps = 1) => {
+    const from = history.current[direction];
+    if (steps < 1 || steps > from.length) return;
+    const to = history.current[direction === "back" ? "forward" : "back"];
     const here = placeHere();
-    if (here) history.current[direction === "back" ? "forward" : "back"].push(here);
+    if (here) to.push(here);
+    for (let step = 1; step < steps; step++) to.push(from.pop()!);
+    const target = from.pop()!;
     updateHistory((n) => n + 1);
     displayAnchor(target);
   });
@@ -362,9 +367,11 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
-      const editing = (event.target as HTMLElement).closest("input,textarea,[contenteditable=true]");
+      const editing = (event.target as HTMLElement).closest("input,textarea,select,[contenteditable=true]");
       const k = event.key.toLowerCase();
-      if (mod && ["f", "j", "o"].includes(k)) {
+      if (mod && event.altKey && k === "g") {
+        event.preventDefault(); setNavigationFocusRequest((n) => n + 1);
+      } else if (mod && ["f", "j", "o"].includes(k)) {
         event.preventDefault();
         if (k === "f") { setPanel("search"); searchRef.current?.focus(); }
         else if (k === "j") { setPanel("ask"); setAskFocus((n) => n + 1); }
@@ -450,13 +457,14 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       </Suspense>
     </SidebarFrame> : null}
     {hoveredAnnotationId ? <style>{`.native-reader [data-annotation-id="${CSS.escape(hoveredAnnotationId)}"] { box-shadow: 0 0 0 2px var(--rphp-accent, #5b50e6); }`}</style> : null}
-    <main className="app-main">
-      <header className="flow-header"><button type="button" aria-label="Back" title="Back (⌘←)" disabled={!history.current.back.length} onClick={() => goHistory("back")}>←</button>
-        <button type="button" aria-label="Forward" title="Forward (⌘→)" disabled={!history.current.forward.length} onClick={() => goHistory("forward")}>→</button>
-        <span title={session.meta.fileName}>{session.meta.title}</span><span>{engine.labelForUnit(currentUnit)}</span><button type="button" onClick={() => fileRef.current?.click()}>Open…</button></header>
+    <main className="app-main flow-pane">
       <FlowView model={model} annotations={annotations} flash={flash} scale={scale} notesCollapsed={notesCollapsed} noteMode={tool === "note"}
         glossaryMarks={glossaryProjection.current.marks} onGlossary={showGlossary}
         onSelection={captureSelection} onSticker={placeSticker} onPosition={onPosition} navigate={navigate} onNavigate={goTo} />
+      <SectionNavigator engine={engine} currentUnit={currentUnit} sequence={navigate?.sequence ?? 0}
+        back={[...history.current.back].reverse()} forward={[...history.current.forward].reverse()}
+        onBack={(steps) => goHistory("back", steps)} onForward={(steps) => goHistory("forward", steps)}
+        onNavigate={goTo} focusRequest={navigationFocusRequest} />
     </main>
     {selection ? createPortal(<FloatingTip key={selection.annotationId ?? `${selection.anchor.kind}-${engine.unitForAnchor(selection.anchor)}`} anchorRect={selection.rect} onClose={closeTip} deps={[tipGlossaryId]}>
       {tipGlossaryId ? <Suspense fallback={<p role="status">Loading definition…</p>}><GlossaryCard store={glossary} entryId={tipGlossaryId}

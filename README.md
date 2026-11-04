@@ -70,8 +70,11 @@ and Linux, but those builds haven't been tried yet.
 - Area highlights (hold **Alt** and drag) and sticky notes (right-click the page).
 - **⌘Z** undoes adding, editing or deleting a highlight or note.
 - Table of contents, full-text search (**⌘F**) and an annotations sidebar.
-- Page navigator with typed page numbers (printed labels like "xii" work) and
-  **Back / Forward** (**⌘← / ⌘→**) over every jump.
+- Bottom-center navigation in both readers, shown while scrolling or hovering
+  and faded while idle. PDFs offer typed page numbers (printed labels like
+  "xii" work); Markdown offers a section picker and previous/next sections.
+  **⌥⌘G** focuses the location control. **Back / Forward** (**⌘← / ⌘→**) and
+  the history menu retrace jumps in either format.
 - Zoom, two-page view, continuous scrolling, and light/dark themes.
 - Cross-references: "Eq. (3.2)", "Theorem 4.1", "Fig. 7" and "[12]" link to
   their targets, with a preview of the target exactly as the document prints it.
