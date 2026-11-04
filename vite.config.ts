@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+import { createRequire } from 'node:module'
 
 // The desktop app serves the built frontend through Tauri, which decides a
 // file's type by sniffing its content before looking at its extension — and
@@ -29,6 +30,13 @@ function noScriptsSniffedAsPdf(): Plugin {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), noScriptsSniffedAsPdf()],
+  resolve: {
+    // Markdown's tiny browser entity decoder uses document.createElement.
+    // Its standard, table-based implementation also works in module workers.
+    alias: {
+      'decode-named-character-reference': createRequire(import.meta.url).resolve('decode-named-character-reference'),
+    },
+  },
   server: {
     proxy: {
       // 127.0.0.1, not localhost: the API server listens on IPv4 loopback

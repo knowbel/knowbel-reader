@@ -11,7 +11,9 @@
     "server": "node server/index.js",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test server/*.test.js server/providers/*.test.js src/glossary/*.test.ts src/storage/*.test.ts src/text/*.test.ts src/navigation/*.test.ts src/grounding/*.test.ts src/library/*.test.ts src/xref/*.test.ts src/notation/*.test.ts src/deepdive/*.test.ts src/figures/*.test.ts src/epub/*.test.ts src/web/*.test.ts",
+    "test": "node --test server/*.test.js server/providers/*.test.js src/glossary/*.test.ts src/storage/*.test.ts src/text/*.test.ts src/navigation/*.test.ts src/grounding/*.test.ts src/library/*.test.ts src/xref/*.test.ts src/notation/*.test.ts src/deepdive/*.test.ts src/figures/*.test.ts src/epub/*.test.ts src/web/*.test.ts src/document/*.test.ts src/markdown/*.test.ts",
+    "test:reader": "node scripts/test-native-reader.mjs",
+    "test:desktop-reader": "node scripts/test-desktop-reader.mjs",
     "tauri": "tauri",
     "postinstall": "patch-package",
     "eval:grounding": "node scripts/eval-grounding.mjs"
@@ -39,7 +41,10 @@
     "react-pdf-highlighter-plus": "^1.3.1",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "unified": "^11.0.5",
+    "remark-parse": "^11.0.0",
+    "decode-named-character-reference": "^1.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
@@ -53,6 +58,7 @@
     "oxlint": "^1.75.0",
     "patch-package": "^8.0.1",
     "typescript": "~6.0.2",
-    "vite": "^8.2.0"
+    "vite": "^8.2.0",
+    "@types/mdast": "^4.0.4"
   }
 }

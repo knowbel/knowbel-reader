@@ -15,8 +15,13 @@ import type { AnchorRect } from "../deepdive/useFlippedPlacement";
 import { ask, MORE_DETAIL_QUESTION, newThread, type AskContext } from "./job";
 import { useAskThreads, type AskStore } from "./store";
 import type { AskThread, AskTurn } from "./types";
+import type { SourceRef } from "../grounding/types";
 
 interface AskPanelProps {
+  reflowable?: boolean;
+  onJob?: (job: Promise<void>) => void;
+  onReturnToPassage?: (thread: AskThread) => void;
+  onDiveFromAnswer?: (text: string, sources: SourceRef[]) => void;
   store: AskStore;
   getContext: () => AskContext | null;
   hasDocument: boolean;
@@ -69,6 +74,10 @@ export default function AskPanel({
   onRemoveAttachment,
   onClearAttachments,
   onPin,
+  onJob,
+  onReturnToPassage,
+  reflowable = false,
+  onDiveFromAnswer,
 }: AskPanelProps) {
   const threads = useAskThreads(store);
   const thread = openThreadId ? threads.find((t) => t.id === openThreadId) : undefined;
@@ -91,7 +100,9 @@ export default function AskPanel({
   const run = (threadId: string, question: string, opts?: Parameters<typeof ask>[4]) => {
     const context = getContext();
     if (!context) return;
-    void ask(store, threadId, question, context, opts);
+    const job = ask(store, threadId, question, context, opts);
+    onJob?.(job);
+    void job;
   };
 
   const submit = () => {
@@ -112,7 +123,7 @@ export default function AskPanel({
 
   // Selecting text in an answer brings up the same toolbar as in a dive
   // (copy, pin, add to question).
-  const [selection, setSelection] = useState<{ text: string; context: string; anchorRect: AnchorRect } | null>(null);
+  const [selection, setSelection] = useState<{ text: string; context: string; anchorRect: AnchorRect; sources: SourceRef[] } | null>(null);
   const captureSelection = () => {
     const current = window.getSelection();
     const text = current?.toString().trim() ?? "";
@@ -126,6 +137,7 @@ export default function AskPanel({
     setSelection({
       text,
       context: answer.textContent ?? text,
+      sources: thread?.turns[[...answer.parentElement!.children].indexOf(answer)]?.sources ?? [],
       anchorRect: { left: rect.left, top: rect.top, bottom: rect.bottom },
     });
   };
@@ -174,6 +186,8 @@ export default function AskPanel({
           />
         ) : null}
       </header>
+      {thread?.mode === "dive" && thread.anchor && onReturnToPassage ? <button type="button" className="flow-return-to-passage" onClick={() => onReturnToPassage(thread)}>Return to passage</button> : null}
+      {thread?.parentThreadId && store.get(thread.parentThreadId) ? <button type="button" className="flow-return-to-passage" onClick={() => onOpenThread(thread.parentThreadId!)}>Previous dive</button> : null}
 
       <div className="sidebar-list ask-body" onMouseUp={captureSelection}>
         {thread ? (
@@ -195,7 +209,7 @@ export default function AskPanel({
         ) : (
           <div className="ask-empty">
             <p>Ask anything about this document.</p>
-            <p className="ask-empty-hint">Mention “this page” or “chapter 3” to narrow it down.</p>
+            <p className="ask-empty-hint">{reflowable ? "Mention “this section” to narrow it down." : "Mention “this page” or “chapter 3” to narrow it down."}</p>
           </div>
         )}
       </div>
@@ -204,6 +218,7 @@ export default function AskPanel({
         <FloatingTip anchorRect={selection.anchorRect} onClose={closeSelection}>
           <HighlightToolbar
             copyText={selection.text}
+            onStartDive={onDiveFromAnswer ? () => { onDiveFromAnswer(selection.text, selection.sources); setSelection(null); window.getSelection()?.removeAllRanges(); } : undefined}
             onPin={() => onPin(selection.text, selection.context)}
             onAddToQuestion={() => {
               onAddToQuestion("answer", selection.text);

@@ -1,5 +1,4 @@
-import type { PDFDocumentProxy } from "pdfjs-dist";
-import { streamAskReply } from "../deepdive/api";
+import { streamAskReply, streamDiveReply } from "../deepdive/api";
 import {
   buildAskSystem,
   isFollowUp,
@@ -18,7 +17,7 @@ import {
 } from "../grounding/attachments";
 import type { SourceRef } from "../grounding/types";
 import { inferScope } from "../grounding/scope";
-import { getBm25, getChunks, getSections, getTextIndex } from "../text/documentText";
+import { getBm25, getChunks, getSections, getTextIndex, isTextProvider, type TextDocument } from "../text/documentText";
 import type { AskStore } from "./store";
 import type { AskThread, AskTurn } from "./types";
 
@@ -27,11 +26,12 @@ import type { AskThread, AskTurn } from "./types";
 // store. Runs outside React (see store.ts).
 
 export interface AskContext {
-  pdfDocument: PDFDocumentProxy;
+  pdfDocument: TextDocument; // legacy name; accepts any document's text provider
   fileName: string;
   pageLabel: (pageNumber: number) => string;
   pageLabels: string[] | null;
   currentPage: number; // what "this page" / "this chapter" means
+  signal?: AbortSignal;
 }
 
 export interface AskOptions {
@@ -60,12 +60,17 @@ const DOCUMENT: AskScope = { kind: "document" };
 async function scopeFor(question: string, thread: AskThread, context: AskContext, retry: boolean): Promise<AskScope> {
   if (retry) return lastAnswer(thread.turns)?.scope ?? DOCUMENT;
   const sections = await getSections(context.pdfDocument).catch(() => []);
-  return inferScope(question, {
+  const inferred = inferScope(question, {
     currentPage: context.currentPage,
     numPages: context.pdfDocument.numPages,
     sections,
     pageLabels: context.pageLabels,
   });
+  if (isTextProvider(context.pdfDocument)) {
+    // Reflowable documents have sections/passages, not visual page numbers.
+    if (inferred.kind === "page" || (inferred.kind === "section" && /^pp\./.test(inferred.title))) return DOCUMENT;
+  }
+  return inferred;
 }
 
 export function newThread(question: string): AskThread {
@@ -196,6 +201,14 @@ export async function ask(
     sources = [];
     basis = { kind: "none" };
   }
+  if (isTextProvider(context.pdfDocument)) {
+    const provider = context.pdfDocument;
+    sources = sources.map((source) => ({ ...source,
+      location: source.location ?? provider.anchorForRange(source.pageNumber, source.start, source.end),
+      locationLabel: source.locationLabel ?? provider.labelForUnit(source.pageNumber),
+    }));
+  }
+  if (context.signal?.aborted) return;
   const answerMeta = {
     sources,
     basis,
@@ -259,9 +272,10 @@ export async function ask(
 
   let streamed = "";
   try {
-    const full = await streamAskReply({
+    const full = await (thread.mode === "dive" ? streamDiveReply : streamAskReply)({
       system,
       messages,
+      signal: context.signal,
       onText: (chunk) => {
         streamed += chunk;
         setAnswer({ content: streamed }, false);
@@ -270,7 +284,7 @@ export async function ask(
     if (!full.trim()) throw new Error("The model returned an empty answer. Try asking again.");
     setAnswer({ content: full, status: undefined }, true);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The answer failed.";
+    const message = context.signal?.aborted ? "The response was stopped." : error instanceof Error ? error.message : "The answer failed.";
     setAnswer({ content: `⚠️ ${message}`, status: "error" }, true);
   }
 }

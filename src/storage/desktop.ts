@@ -3,7 +3,8 @@ import type { DocDataKind, DocumentMeta, LibraryStorage } from "./types.ts";
 // Desktop storage: plain files under the app data folder, one folder per
 // document —
 //
-//   library/<docId>/source.pdf     the imported copy of the PDF
+//   library/<docId>/source.pdf     existing PDF documents
+//   library/<docId>/source.md      original Markdown (never converted)
 //   library/<docId>/meta.json      DocumentMeta
 //   library/<docId>/<kind>.json    one file per DocDataKind
 //
@@ -24,6 +25,7 @@ export interface DesktopFs {
 }
 
 const ROOT = "library";
+const SOURCE_FILES = { pdf: "source.pdf", markdown: "source.md", html: "source.html", epub: "source.epub" };
 
 // A docId becomes a directory name, so only accept what computeDocId
 // produces — never a path that could climb out of the library.
@@ -90,11 +92,13 @@ export function createDesktopStorage(fs: DesktopFs): LibraryStorage {
       return writeAtomic(docDir(meta.docId), "meta.json", (path) => fs.writeTextFile(path, json));
     },
     async getFile(docId) {
-      const path = `${docDir(docId)}/source.pdf`;
+      const meta = await readJson<DocumentMeta>(`${docDir(docId)}/meta.json`);
+      const name = meta?.format && Object.hasOwn(SOURCE_FILES, meta.format) ? SOURCE_FILES[meta.format] : "source.pdf";
+      const path = `${docDir(docId)}/${name}`;
       return (await fs.exists(path)) ? fs.readFile(path) : null;
     },
-    async putFile(docId, bytes) {
-      return writeAtomic(docDir(docId), "source.pdf", (path) => fs.writeFile(path, bytes));
+    async putFile(docId, bytes, format) {
+      return writeAtomic(docDir(docId), format && Object.hasOwn(SOURCE_FILES, format) ? SOURCE_FILES[format] : "source.pdf", (path) => fs.writeFile(path, bytes));
     },
     async getData<T>(docId: string, kind: DocDataKind) {
       return readJson<T>(`${docDir(docId)}/${kind}.json`);

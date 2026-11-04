@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createDesktopStorage, type DesktopFs } from "./desktop.ts";
 import { DocDataWriter } from "./docDataWriter.ts";
-import { computeDocId, legacyKey, migrateLegacy, openDocument, type LegacyStore } from "./documents.ts";
+import { computeDocId, importDocument, legacyKey, migrateLegacy, openDocument, type LegacyStore } from "./documents.ts";
 import { createMemoryStorage } from "./memory.ts";
 import type { DocumentMeta, LibraryStorage } from "./types.ts";
 
@@ -86,6 +86,41 @@ function fakeLegacy(entries: Record<string, string>): LegacyStore & { items: Map
 
 const DOC_ID = "a".repeat(64);
 const OTHER_ID = "b".repeat(64);
+
+test("desktop: original Markdown bytes and notes round-trip without using source.pdf", async () => {
+  const { fs, files } = fakeFs();
+  const storage = createDesktopStorage(fs);
+  const bytes = new TextEncoder().encode("# Native notes\n\nA passage.");
+  const { meta } = await importDocument(storage, { bytes, fileName: "Native notes.md", format: "markdown" });
+  assert.equal(meta.format, "markdown");
+  assert.equal(meta.title, "Native notes");
+  assert.ok(files.has(`library/${meta.docId}/source.md`));
+  assert.ok(!files.has(`library/${meta.docId}/source.pdf`));
+  assert.deepEqual(await storage.getFile(meta.docId), bytes);
+  await storage.putData(meta.docId, "nativeAnnotations", [{ id: "native-highlight", comment: "Remember this" }]);
+  const opened = await openDocument(storage, { bytes, fileName: "renamed.markdown", docId: meta.docId });
+  assert.deepEqual(opened.data.nativeAnnotations, [{ id: "native-highlight", comment: "Remember this" }]);
+  assert.ok(opened.meta.openedAt);
+});
+
+test("writer flush waits for saves that have already left the debounce queue", async () => {
+  const storage = createMemoryStorage();
+  let finish!: () => void;
+  let started!: () => void;
+  const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const put = storage.putData;
+  storage.putData = async (...args) => { started(); await gate; await put(...args); };
+  const writer = new DocDataWriter(storage);
+  writer.schedule(DOC_ID, "nativeAnnotations", [{ id: "saved" }]);
+  await startedPromise;
+  let flushed = false;
+  const flush = writer.flush().then(() => { flushed = true; });
+  await Promise.resolve();
+  assert.equal(flushed, false);
+  finish(); await flush;
+  assert.deepEqual(await storage.getData(DOC_ID, "nativeAnnotations"), [{ id: "saved" }]);
+});
 
 function meta(docId: string, title = "Book"): DocumentMeta {
   const at = "2026-09-27T00:00:00.000Z";

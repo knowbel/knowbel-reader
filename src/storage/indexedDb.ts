@@ -7,7 +7,7 @@ import type { DocDataKind, DocumentMeta, LibraryStorage } from "./types.ts";
 const DB_NAME = "knowbelreader";
 const DB_VERSION = 1;
 const DOCUMENTS = "documents"; // DocumentMeta, keyed by docId
-const FILES = "files"; // PDF bytes, keyed by docId
+const FILES = "files"; // original source bytes (converted PDF for legacy EPUB/web imports)
 const DOC_DATA = "docData"; // any DocDataKind value, keyed by `${docId}/${kind}`
 
 function promisify<T>(request: IDBRequest<T>): Promise<T> {

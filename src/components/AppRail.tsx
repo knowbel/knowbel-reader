@@ -73,6 +73,7 @@ const PANEL_ITEMS: { id: SidebarPanel; label: string; icon: ReactNode }[] = [
 ];
 
 export interface ViewSettings {
+  reflowable?: boolean;
   zoomLabel: string;
   currentZoomPercent: () => number;
   onZoomIn: () => void;
@@ -94,6 +95,7 @@ export interface ViewSettings {
 }
 
 interface AppRailProps {
+  reflowable?: boolean;
   onHome: () => void; // back to the library
   // The panel shown in the sidebar, or null (none open, or in Deep Dive).
   activePanel: SidebarPanel | null;
@@ -115,6 +117,7 @@ export default function AppRail({
   pen,
   onPenChange,
   view,
+  reflowable = false,
 }: AppRailProps) {
   return (
     <nav className="app-rail" aria-label="Reader controls">
@@ -152,15 +155,15 @@ export default function AppRail({
           pen={pen}
           onPenChange={onPenChange}
         />
-        <ToolButton
+        {!reflowable ? <ToolButton
           label="Area highlight (or Alt-drag)"
           active={tool === "area"}
           onClick={() => onSelectTool("area")}
         >
           <SquareDashed {...ICON_PROPS} />
-        </ToolButton>
+        </ToolButton> : null}
         <ToolButton
-          label="Sticky note (or right-click the page)"
+          label={reflowable ? "Sticky note (or right-click a passage)" : "Sticky note (or right-click the page)"}
           active={tool === "note"}
           onClick={() => onSelectTool("note")}
         >
@@ -170,7 +173,7 @@ export default function AppRail({
 
       <div className="app-rail-spacer" />
 
-      {DEV_MODE ? <ExperimentsMenu /> : null}
+      {DEV_MODE && !reflowable ? <ExperimentsMenu /> : null}
       <ViewMenu view={view} />
     </nav>
   );
@@ -358,8 +361,10 @@ function ViewMenu({ view }: { view: ViewSettings }) {
 
           <div className="rail-popover-separator" />
 
-          <SwitchRow icon={<Columns2 width={16} height={16} />} label="Two-page view" checked={view.twoPageView} onChange={view.onToggleTwoPageView} />
-          <SwitchRow icon={<Rows3 width={16} height={16} />} label="Continuous scrolling" checked={view.continuousScroll} onChange={view.onToggleContinuousScroll} />
+          {!view.reflowable ? <>
+            <SwitchRow icon={<Columns2 width={16} height={16} />} label="Two-page view" checked={view.twoPageView} onChange={view.onToggleTwoPageView} />
+            <SwitchRow icon={<Rows3 width={16} height={16} />} label="Continuous scrolling" checked={view.continuousScroll} onChange={view.onToggleContinuousScroll} />
+          </> : null}
           <SwitchRow icon={<MessageSquare width={16} height={16} />} label="Collapse sticky notes" checked={view.notesCollapsed} onChange={view.onToggleNotesCollapsed} />
 
           <div className="rail-popover-separator" />

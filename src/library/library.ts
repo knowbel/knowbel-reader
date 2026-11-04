@@ -45,6 +45,10 @@ export function continueReading(documents: DocumentMeta[], count = 3): DocumentM
 // "p. 124 of 310", and how far along that is (0–1) — for a document the
 // reader has opened; one never opened has no progress to show.
 export function readingProgress(doc: DocumentMeta): { label: string; fraction: number } | null {
+  if (doc.format && doc.format !== "pdf" && doc.readingProgress !== undefined && doc.openedAt) {
+    const fraction = Math.max(0, Math.min(1, doc.readingProgress));
+    return { label: `${Math.round(fraction * 100)}% read`, fraction };
+  }
   if (!doc.pageCount || !doc.openedAt) return null;
   const page = Math.min(doc.lastPage ?? 1, doc.pageCount);
   return { label: `p. ${page} of ${doc.pageCount}`, fraction: page / doc.pageCount };

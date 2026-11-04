@@ -87,10 +87,10 @@ function DocumentCaption({
         "from context"
       ) : definedRef && onJumpToRef ? (
         <button type="button" className="glossary-caption-link" onClick={() => onJumpToRef(definedRef)}>
-          <Star width={10} height={10} fill="currentColor" /> defined on p. {pageLabel(definedRef.pageNumber)}
+          <Star width={10} height={10} fill="currentColor" /> defined {definedRef.locationLabel ? `in ${definedRef.locationLabel}` : `on p. ${pageLabel(definedRef.pageNumber)}`}
         </button>
       ) : definedRef ? (
-        `defined on p. ${pageLabel(definedRef.pageNumber)}`
+        `defined ${definedRef.locationLabel ? `in ${definedRef.locationLabel}` : `on p. ${pageLabel(definedRef.pageNumber)}`}`
       ) : (
         "defined in the text"
       )}

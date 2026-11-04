@@ -1,5 +1,5 @@
-import { extractPageTextItems } from "react-pdf-highlighter-plus";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { FlowAnchor } from "../document/model.ts";
 import { buildTextIndex, type DocumentTextIndex } from "../glossary/textIndex";
 import { buildBm25, type Bm25Index } from "../grounding/retrieval";
 import { getStorage } from "../storage";
@@ -16,14 +16,31 @@ import { buildSections, type OutlineSource, type Section } from "./sections";
 // may come from any component — already knows where the cache lives.
 let activeDocId: string | null = null;
 
+// A text provider exposes ordered reading units to the existing retrieval
+// algorithms. `pageNumber`/`numPages` in that legacy API are unit ordinals
+// here, never visual pages or fabricated PDF geometry. Persisted native
+// references always include a semantic anchor and a human section label.
+export interface TextProvider {
+  kind: "flow";
+  numPages: number;
+  getTextIndex(): Promise<DocumentTextIndex>;
+  getSections(): Promise<Section[]>;
+  anchorForRange(unit: number, start: number, end: number): FlowAnchor;
+  labelForUnit(unit: number): string;
+}
+export type TextDocument = PDFDocumentProxy | TextProvider;
+export function isTextProvider(document: TextDocument): document is TextProvider {
+  return "kind" in document && document.kind === "flow";
+}
+
 export function setActiveDocument(docId: string | null) {
   activeDocId = docId;
 }
 
-const indexCache = new WeakMap<PDFDocumentProxy, Promise<DocumentTextIndex>>();
-const chunkCache = new WeakMap<PDFDocumentProxy, Promise<TextChunk[]>>();
-const sectionCache = new WeakMap<PDFDocumentProxy, Promise<Section[]>>();
-const bm25Cache = new WeakMap<PDFDocumentProxy, Promise<Bm25Index>>();
+const indexCache = new WeakMap<TextDocument, Promise<DocumentTextIndex>>();
+const chunkCache = new WeakMap<TextDocument, Promise<TextChunk[]>>();
+const sectionCache = new WeakMap<TextDocument, Promise<Section[]>>();
+const bm25Cache = new WeakMap<TextDocument, Promise<Bm25Index>>();
 
 async function loadPages(pdfDocument: PDFDocumentProxy, docId: string | null) {
   const identity: CacheIdentity = {
@@ -39,6 +56,7 @@ async function loadPages(pdfDocument: PDFDocumentProxy, docId: string | null) {
       // Unreadable cache: extract again, and overwrite it below.
     }
   }
+  const { extractPageTextItems } = await import("react-pdf-highlighter-plus");
   const pages = await extractPageTextItems(pdfDocument);
   if (docId) {
     storage.putData(docId, "textIndex", compactPages(pages, identity)).catch(() => {
@@ -51,7 +69,8 @@ async function loadPages(pdfDocument: PDFDocumentProxy, docId: string | null) {
 // Extracting every page's text takes a while on a long book, so App starts
 // this as soon as a document opens (and the result is cached on disk for
 // the next open); lookups then usually find it ready.
-export function getTextIndex(pdfDocument: PDFDocumentProxy): Promise<DocumentTextIndex> {
+export function getTextIndex(pdfDocument: TextDocument): Promise<DocumentTextIndex> {
+  if (isTextProvider(pdfDocument)) return pdfDocument.getTextIndex();
   let index = indexCache.get(pdfDocument);
   if (!index) {
     index = loadPages(pdfDocument, activeDocId).then(buildTextIndex);
@@ -61,7 +80,7 @@ export function getTextIndex(pdfDocument: PDFDocumentProxy): Promise<DocumentTex
   return index;
 }
 
-export function getChunks(pdfDocument: PDFDocumentProxy): Promise<TextChunk[]> {
+export function getChunks(pdfDocument: TextDocument): Promise<TextChunk[]> {
   let chunks = chunkCache.get(pdfDocument);
   if (!chunks) {
     chunks = getTextIndex(pdfDocument).then(chunkDocument);
@@ -72,7 +91,7 @@ export function getChunks(pdfDocument: PDFDocumentProxy): Promise<TextChunk[]> {
 }
 
 // The relevance index over the chunks, for choosing what the model sees.
-export function getBm25(pdfDocument: PDFDocumentProxy): Promise<Bm25Index> {
+export function getBm25(pdfDocument: TextDocument): Promise<Bm25Index> {
   let index = bm25Cache.get(pdfDocument);
   if (!index) {
     index = getChunks(pdfDocument).then(buildBm25);
@@ -82,7 +101,8 @@ export function getBm25(pdfDocument: PDFDocumentProxy): Promise<Bm25Index> {
   return index;
 }
 
-export function getSections(pdfDocument: PDFDocumentProxy): Promise<Section[]> {
+export function getSections(pdfDocument: TextDocument): Promise<Section[]> {
+  if (isTextProvider(pdfDocument)) return pdfDocument.getSections();
   let sections = sectionCache.get(pdfDocument);
   if (!sections) {
     sections = buildSections(pdfDocument as unknown as OutlineSource);

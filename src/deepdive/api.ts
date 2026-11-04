@@ -91,8 +91,9 @@ export function streamAskReply(params: {
   system: string;
   messages: DiveMessage[];
   onText: (chunk: string) => void;
+  signal?: AbortSignal;
 }): Promise<string> {
-  return postSse("/api/ask/stream", { system: params.system, messages: params.messages }, params.onText);
+  return postSse("/api/ask/stream", { system: params.system, messages: params.messages }, params.onText, params.signal);
 }
 
 export function streamGlossaryDefinition(params: {

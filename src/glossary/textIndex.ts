@@ -7,6 +7,7 @@ import type { LTWHP, PdfExtractedPage, PdfTextItem, Scaled, ScaledPosition } fro
 // extractPageTextItems (see job.ts).
 
 export interface IndexedPage {
+  canonical?: boolean; // native rendered text: keep offsets, match case with regex flags
   pageNumber: number;
   width: number;
   height: number;
@@ -239,9 +240,11 @@ export function buildTermRegex(term: string): { regex: RegExp; caseSensitive: bo
 
 function matchRegex(index: DocumentTextIndex, regex: RegExp, caseSensitive: boolean, related?: true): TermMatch[] {
   const matches: TermMatch[] = [];
+  let canonicalRegex: RegExp | undefined;
   for (const page of index.pages) {
-    const haystack = caseSensitive ? page.text : page.lower;
-    for (const m of haystack.matchAll(regex)) {
+    const haystack = page.canonical || caseSensitive ? page.text : page.lower;
+    const pattern = page.canonical && !caseSensitive ? canonicalRegex ??= new RegExp(regex.source, regex.flags.includes("i") ? regex.flags : `${regex.flags}i`) : regex;
+    for (const m of haystack.matchAll(pattern)) {
       matches.push({ page, start: m.index, end: m.index + m[0].length, ...(related ? { related } : {}) });
     }
   }

@@ -5,10 +5,11 @@ export interface GlossaryExcerpt {
   pageLabel: string;
   text: string;
   isDefinition: boolean; // reads like where the document defines the term (see findDefiningMatch)
+  native?: boolean;
 }
 
 export function buildGlossarySystem(fileName: string): string {
-  return `You write glossary entries for a reader studying a PDF titled "${fileName}". You are given a term and numbered excerpts from the document where it appears. Define the term the way THIS document uses it.
+  return `You write glossary entries for a reader studying a document titled "${fileName}". You are given a term and numbered excerpts from the document where it appears. Define the term the way THIS document uses it.
 
 Reply in exactly this format, with nothing before or after it:
 SOURCE: defined | inferred | general
@@ -84,7 +85,7 @@ export function referenceCandidates(lookup: ReferenceLookup | null): ReferenceCa
 
 export function buildGlossaryPrompt(term: string, excerpts: GlossaryExcerpt[], references: ReferenceCandidate[] = []): string {
   const body = excerpts
-    .map((excerpt) => `[${excerpt.label}${excerpt.isDefinition ? " ★" : ""}, p. ${excerpt.pageLabel}] ${excerpt.text}`)
+    .map((excerpt) => `[${excerpt.label}${excerpt.isDefinition ? " ★" : ""}, ${excerpt.native ? "" : "p. "}${excerpt.pageLabel}] ${excerpt.text}`)
     .join("\n\n");
   const lookup = references.length
     ? references

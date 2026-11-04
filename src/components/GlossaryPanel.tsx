@@ -61,7 +61,7 @@ function RefRow({
     >
       <span className="glossary-ref-page">
         {isDefinition ? <Star width={10} height={10} fill="currentColor" /> : null}
-        p. {formatPageLabel(pageLabels, glossaryRef.pageNumber)}
+        {glossaryRef.locationLabel || `p. ${formatPageLabel(pageLabels, glossaryRef.pageNumber)}`}
       </span>
       <span className="glossary-ref-snippet">
         {glossaryRef.before}
@@ -304,7 +304,7 @@ export default function GlossaryPanel({
           <div className="sidebar-empty">
             <p>No terms yet</p>
             <p className="sidebar-hint">
-              Select a word or phrase in the PDF and choose Glossary. Its meaning, as this document uses it,
+              Select a word or phrase in the document and choose Glossary. Its meaning, as this document uses it,
               appears right next to the selection and is saved here with links to everywhere it appears.
             </p>
           </div>

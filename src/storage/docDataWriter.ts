@@ -17,6 +17,8 @@ interface Pending {
 export class DocDataWriter {
   private pending = new Map<string, Pending>();
   private last = new Map<string, unknown>();
+  private inFlight = new Set<Promise<void>>();
+  private writes = new Map<string, Promise<void>>();
   private storage: LibraryStorage;
   private onError: (error: unknown) => void;
 
@@ -49,20 +51,29 @@ export class DocDataWriter {
         return this.write(key);
       }),
     );
+    // A timer may already have started a write before flush was called.
+    // Leaving a reader must wait for that write as well as pending timers.
+    await Promise.all([...this.inFlight]);
   }
 
-  private async write(key: string) {
+  private write(key: string): Promise<void> {
     const entry = this.pending.get(key);
-    if (!entry) return;
+    if (!entry) return Promise.resolve();
     this.pending.delete(key);
     this.last.set(key, entry.value);
-    try {
-      await this.storage.putData(entry.docId, entry.kind, entry.value);
-    } catch (error) {
-      // Not written after all: forget it as stored, so the next change
-      // retries rather than being skipped as unchanged.
+    // Keep the same ordering on IndexedDB/memory as on desktop, even when
+    // a second edit arrives while the previous save is still in flight.
+    const previous = this.writes.get(key) ?? Promise.resolve();
+    const write = previous.then(() => this.storage.putData(entry.docId, entry.kind, entry.value)).catch((error) => {
       if (this.last.get(key) === entry.value) this.last.delete(key);
       this.onError(error);
-    }
+    });
+    this.writes.set(key, write);
+    this.inFlight.add(write);
+    void write.finally(() => {
+      this.inFlight.delete(write);
+      if (this.writes.get(key) === write) this.writes.delete(key);
+    });
+    return write;
   }
 }

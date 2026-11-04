@@ -1,11 +1,10 @@
-import type { PDFDocumentProxy } from "pdfjs-dist";
 import { streamGlossaryDefinition } from "../deepdive/api";
 import type { GlossaryJobContext } from "../glossary/job";
 import type { GlossaryStore } from "../glossary/store";
 import { matchId, matchPosition, snippetAround, type TermMatch } from "../glossary/textIndex";
 import type { GlossaryEntry, GlossaryRef } from "../glossary/types";
 import { formatPageLabel } from "../pageLabels";
-import { getSections, getTextIndex } from "../text/documentText";
+import { getSections, getTextIndex, type TextDocument } from "../text/documentText";
 import { buildNotationPrompt, buildNotationSystem, parseNotationReply, type NotationExcerpt } from "./prompts";
 import {
   findSymbolSites,
@@ -37,9 +36,9 @@ export interface NotationRequest {
   image?: { mediaType: string; data: string }; // an area-selected symbol, as printed
 }
 
-const lists = new WeakMap<PDFDocumentProxy, Promise<SymbolListEntry[]>>();
+const lists = new WeakMap<TextDocument, Promise<SymbolListEntry[]>>();
 
-export function getSymbolList(pdf: PDFDocumentProxy): Promise<SymbolListEntry[]> {
+export function getSymbolList(pdf: TextDocument): Promise<SymbolListEntry[]> {
   let list = lists.get(pdf);
   if (!list) {
     list = Promise.all([getTextIndex(pdf), getSections(pdf).catch(() => [])]).then(([index, sections]) =>

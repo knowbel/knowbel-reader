@@ -1,6 +1,7 @@
 import type { AskBasis, AskScope } from "../grounding/ask";
 import type { Attachment } from "../grounding/attachments";
 import type { SourceRef } from "../grounding/types";
+import type { FlowAnchor } from "../document/model";
 
 export interface AskTurn {
   role: "user" | "assistant";
@@ -30,4 +31,7 @@ export interface AskThread {
   turns: AskTurn[];
   createdAt: string;
   updatedAt: string;
+  mode?: "dive";
+  anchor?: FlowAnchor;
+  parentThreadId?: string;
 }

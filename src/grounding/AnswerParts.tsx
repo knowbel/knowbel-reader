@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ResolvedRef } from "./CitationChip";
 import type { AnswerGrounding, SourceRef } from "./types";
+import { sourceLabel } from "./citations";
 
 const BADGES: Record<AnswerGrounding, { label: string; title: string }> = {
   document: { label: "Cites the document", title: "The answer cites passages supplied to the model; citations do not verify every claim." },
@@ -46,7 +47,7 @@ export function SourcesFooter({
 }) {
   const [open, setOpen] = useState(false);
   if (sent.length === 0) return null;
-  const pages = [...new Set(cited.map((source) => `p. ${pageLabel(source.pageNumber)}`))];
+  const pages = [...new Set(cited.map((source) => sourceLabel(source, pageLabel)))];
   const summary = `${basis ?? `${sent.length} passage${sent.length === 1 ? "" : "s"} supplied`}${
     pages.length ? ` · cites ${pages.join(", ")}` : ""
   }`;
@@ -70,9 +71,9 @@ export function SourcesFooter({
                 type="button"
                 className="answer-sources-item"
                 onClick={() => onJump({ source, range: [source.start, source.end] })}
-                title="Show in the PDF"
+                title="Show in the document"
               >
-                <span className="cite-preview-page">p. {pageLabel(source.pageNumber)}</span>
+                <span className="cite-preview-page">{sourceLabel(source, pageLabel)}</span>
                 <span className="answer-sources-snippet">
                   {source.text.length > 180 ? `${source.text.slice(0, 180)}…` : source.text}
                 </span>

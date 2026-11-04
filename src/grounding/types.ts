@@ -2,6 +2,8 @@
 // and kept with the answer so its citations still resolve — to a page, and
 // to exact characters on it — after a reload, without the model or the
 // text index.
+import type { FlowAnchor } from "../document/model.ts";
+
 export interface SourceRef {
   label: string; // "S3" — unique within one request
   pageNumber: number;
@@ -9,6 +11,8 @@ export interface SourceRef {
   end: number;
   text: string;
   chunkId?: string; // the TextChunk it came from, when it came from one
+  location?: FlowAnchor;
+  locationLabel?: string;
   // Set only by the Deep Dive context experiments (grounding/context.ts):
   // how the passage was found — for debugging and the eval, never shown —
   // what the selection calls it ("Eq. (3.2)", "Theorem 4.1", "definition of

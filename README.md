@@ -1,11 +1,11 @@
 # Knowbel Reader
 
-Knowbel Reader is a PDF and EPUB reader for studying dense documents: textbooks,
+Knowbel Reader is a PDF, EPUB and Markdown reader for studying dense documents: textbooks,
 papers, lecture notes, and articles saved from the web. It does everything you'd expect for highlighting and
 note-taking, and adds an AI study layer. You can select a passage and "deep
 dive" into it, ask questions about the whole document, and build a glossary of
 its terms and notation. Answers are grounded in the document itself and cite
-the pages they draw on.
+the pages or sections they draw on.
 
 It runs in the browser or as a native desktop app via [Tauri](https://tauri.app).
 So far it has only been tested on macOS. Tauri can also build it for Windows
@@ -14,9 +14,21 @@ and Linux, but those builds haven't been tried yet.
 ## Features
 
 ### Library
-- Import PDFs and EPUBs (**⌘O**). Each one's title, author, page count and
-  cover are read from the file, and importing the same file twice opens the
-  existing entry.
+- Import PDFs, EPUBs and Markdown (`.md`, `.markdown`) (**⌘O**). Importing the
+  same content twice opens its existing entry. PDFs and EPUBs also supply
+  their embedded title, author, page count and cover.
+- Markdown is read natively, with reflowing text, adjustable text size, GFM
+  tables and task lists, code, links, and KaTeX equations. The original file
+  is kept unchanged. Text highlights, comments, sticky notes, search,
+  glossary, Ask, and Deep Dive use text anchors and section citations.
+  Images and tables are identified from the document structure; click one
+  to annotate it or add it to a question. Image attachments are resized only
+  when used. Deep Dives and follow-up dives are saved in the study history.
+  - Remote and inline images are supported. Relative image paths currently
+    show a placeholder: choosing one Markdown file does not grant access
+    to adjacent files. Raw HTML inside Markdown is displayed as inert text.
+  - Reimporting the same content keeps its notes; edited content is a new
+    document. PDF export and area selection apply to PDF documents.
 - An EPUB becomes a PDF when it's added: the browser lays it out (using the
   book's own stylesheets) as a 6×9in paperback set in Literata. The result has real
   text, the book's pictures, working links, and its table of contents as
@@ -202,6 +214,8 @@ How the packaged app differs from the browser version:
 | `npm run build`          | Type-check and build the frontend into `dist/`            |
 | `npm start`              | Serve the built frontend and API from one Node process   |
 | `npm test`               | Run the unit tests                                        |
+| `npm run test:reader`    | Browser reader regression checks (local Chrome debugger) |
+| `npm run test:desktop-reader` | Cold-start checks in desktop WebKit on macOS (build first) |
 | `npm run lint`           | Lint with oxlint                                          |
 | `npm run build:server`   | Bundle the API server for the desktop app (run by `tauri build`) |
 | `npm run tauri dev` / `build` | Run or package the desktop app                       |

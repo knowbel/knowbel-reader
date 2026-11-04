@@ -1,3 +1,5 @@
+import type { DocumentFormat, TextPoint } from "../document/model.ts";
+
 // Everything Knowbel Reader keeps per document, behind one small interface with
 // two backends: plain files in the app data folder on desktop (desktop.ts)
 // and IndexedDB on the web (indexedDb.ts). See
@@ -13,6 +15,7 @@ export type DocDataKind =
   | "generalNotes"
   | "glossary"
   | "threads"
+  | "nativeAnnotations"
   | "textIndex"
   | "thumbnail"; // the library card's cover: page 1, as a JPEG data URL
 
@@ -24,6 +27,7 @@ export const DOC_DATA_KINDS: readonly DocDataKind[] = [
   "generalNotes",
   "glossary",
   "threads",
+  "nativeAnnotations",
   "textIndex",
   "thumbnail",
 ];
@@ -34,10 +38,11 @@ export interface ReadingView {
   twoPage: boolean;
   continuous: boolean;
   panel: string | null; // the sidebar panel open, if any
+  threadId?: string | null; // native reader's open study thread
 }
 
 export interface DocumentMeta {
-  docId: string; // SHA-256 of the PDF bytes, hex
+  docId: string; // SHA-256 of original source bytes (PDF, EPUB or native text), hex
   title: string;
   fileName: string;
   byteLength: number;
@@ -47,6 +52,12 @@ export interface DocumentMeta {
   pageCount?: number;
   lastPage?: number;
   view?: ReadingView;
+  // Absent in existing libraries: the stored file is a PDF, including
+  // EPUBs and web articles converted by earlier versions of the reader.
+  format?: DocumentFormat;
+  readingPosition?: TextPoint;
+  readingProgress?: number;
+  textScale?: number;
   // Notes imported (from a backup) for a PDF that isn't in this library yet:
   // importing that PDF brings them together.
   fileMissing?: boolean;
@@ -72,7 +83,7 @@ export interface LibraryStorage {
   getMeta(docId: string): Promise<DocumentMeta | null>;
   putMeta(meta: DocumentMeta): Promise<void>;
   getFile(docId: string): Promise<Uint8Array | null>;
-  putFile(docId: string, bytes: Uint8Array): Promise<void>;
+  putFile(docId: string, bytes: Uint8Array, format?: DocumentFormat): Promise<void>;
   getData<T>(docId: string, kind: DocDataKind): Promise<T | null>;
   putData(docId: string, kind: DocDataKind, value: unknown): Promise<void>;
   removeDocument(docId: string): Promise<void>;

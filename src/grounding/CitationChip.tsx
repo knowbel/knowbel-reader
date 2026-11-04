@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { useFlippedPlacement, type AnchorRect } from "../deepdive/useFlippedPlacement";
 import type { ChipTarget } from "./citations";
 import type { SourceRef } from "./types";
+import { sourceLabel } from "./citations";
 
 const SHOW_DELAY_MS = 200;
 const HIDE_DELAY_MS = 200;
@@ -145,9 +146,9 @@ function CitationPreview({
             key={`${source.label}-${range[0]}`}
             className="cite-preview-source"
             onClick={() => onJump(resolved)}
-            title="Show in the PDF"
+            title="Show in the document"
           >
-            <span className="cite-preview-page">p. {pageLabel(source.pageNumber)}</span>
+            <span className="cite-preview-page">{sourceLabel(source, pageLabel)}</span>
             <span className="cite-preview-text">
               {source.text.slice(0, from)}
               <mark>{source.text.slice(from, to)}</mark>

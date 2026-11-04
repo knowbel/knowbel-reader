@@ -1,7 +1,6 @@
-import type { PDFDocumentProxy } from "pdfjs-dist";
 import { fetchGlossaryReference, streamGlossaryDefinition } from "../deepdive/api";
 import { formatPageLabel } from "../pageLabels";
-import { getTextIndex } from "../text/documentText";
+import { getTextIndex, isTextProvider, type TextDocument } from "../text/documentText";
 import { buildGlossaryPrompt, buildGlossarySystem, referenceCandidates, type GlossaryExcerpt } from "./prompts";
 import { parseGlossaryReply } from "./reply";
 import type { GlossaryStore } from "./store";
@@ -45,7 +44,7 @@ function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
 }
 
 export interface GlossaryJobContext {
-  pdfDocument: PDFDocumentProxy;
+  pdfDocument: TextDocument;
   fileName: string;
   pageLabels: string[] | null;
 }
@@ -93,7 +92,12 @@ export function addGlossaryTerm(
   return entry.id;
 }
 
-function toRef(match: TermMatch): GlossaryRef | null {
+function toRef(match: TermMatch, document: TextDocument): GlossaryRef | null {
+  if (isTextProvider(document)) return {
+    id: matchId(match), pageNumber: match.page.pageNumber,
+    location: document.anchorForRange(match.page.pageNumber, match.start, match.end),
+    locationLabel: document.labelForUnit(match.page.pageNumber), ...snippetAround(match, SNIPPET_RADIUS),
+  };
   const position = matchPosition(match);
   if (!position) return null;
   return { id: matchId(match), pageNumber: match.page.pageNumber, position, ...snippetAround(match, SNIPPET_RADIUS) };
@@ -101,13 +105,13 @@ function toRef(match: TermMatch): GlossaryRef | null {
 
 // References in document order, capped — but always including the one that
 // defines the term, wherever it falls.
-function toRefs(matches: TermMatch[], mustInclude?: TermMatch): GlossaryRef[] {
+function toRefs(matches: TermMatch[], document: TextDocument, mustInclude?: TermMatch): GlossaryRef[] {
   const kept = matches.slice(0, MAX_STORED_REFS);
   if (mustInclude && !kept.includes(mustInclude)) {
     kept.push(mustInclude);
     kept.sort((a, b) => a.page.pageNumber - b.page.pageNumber || a.start - b.start);
   }
-  return kept.map(toRef).filter((ref): ref is GlossaryRef => ref !== null);
+  return kept.map((match) => toRef(match, document)).filter((ref): ref is GlossaryRef => ref !== null);
 }
 
 function excerptText(match: TermMatch): string {
@@ -144,7 +148,7 @@ export async function runGlossaryJob(store: GlossaryStore, entryId: string, cont
     const index = await getTextIndex(context.pdfDocument);
     if (signal.aborted) return;
     let matches = findTermMatches(index, entry.term);
-    store.update(entryId, { refs: toRefs(matches), refCount: matches.length }, { persist: false });
+    store.update(entryId, { refs: toRefs(matches, context.pdfDocument), refCount: matches.length }, { persist: false });
 
     // Related forms ("entangled" for "entanglement") are candidates too:
     // the passage that defines a term often uses one of them.
@@ -153,7 +157,8 @@ export async function runGlossaryJob(store: GlossaryStore, entryId: string, cont
     const defining = findDefiningMatch(chosen);
     const excerpts: GlossaryExcerpt[] = chosen.map((match, i) => ({
       label: `S${i + 1}`,
-      pageLabel: formatPageLabel(context.pageLabels, match.page.pageNumber),
+      pageLabel: isTextProvider(context.pdfDocument) ? context.pdfDocument.labelForUnit(match.page.pageNumber) : formatPageLabel(context.pageLabels, match.page.pageNumber),
+      native: isTextProvider(context.pdfDocument),
       text: excerptText(match),
       isDefinition: match === defining,
     }));
@@ -165,7 +170,8 @@ export async function runGlossaryJob(store: GlossaryStore, entryId: string, cont
       if (page?.text) {
         excerpts.push({
           label: `S${excerpts.length + 1}`,
-          pageLabel: formatPageLabel(context.pageLabels, entry.pageNumber),
+          pageLabel: isTextProvider(context.pdfDocument) ? context.pdfDocument.labelForUnit(entry.pageNumber) : formatPageLabel(context.pageLabels, entry.pageNumber),
+          native: isTextProvider(context.pdfDocument),
           text: page.text.slice(0, FALLBACK_PAGE_CHARS),
           isDefinition: false,
         });
@@ -213,7 +219,7 @@ export async function runGlossaryJob(store: GlossaryStore, entryId: string, cont
       literal: parsed.literal,
       reference: references.find((candidate) => candidate.label === parsed.reference)?.reference,
       aliases,
-      refs: toRefs(matches, definedMatch),
+      refs: toRefs(matches, context.pdfDocument, definedMatch),
       refCount: matches.length,
       definedRefId: definedMatch ? matchId(definedMatch) : undefined,
     });

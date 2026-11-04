@@ -1,6 +1,7 @@
 import type { DocumentTextIndex, IndexedPage } from "../glossary/textIndex.ts";
 import { locateSelection } from "./context.ts";
 import type { SourceRef } from "./types.ts";
+import type { FlowAnchor } from "../document/model.ts";
 
 // What the reader added to their question ("Add to question"): text from the
 // PDF or from an earlier AI answer, or a region of a page (an area
@@ -23,6 +24,8 @@ export interface Attachment {
   truncated?: boolean; // cut to ATTACHMENT_MAX_CHARS
   image?: RegionImage; // region
   range?: [number, number]; // region: its text's [start, end) in the page text
+  location?: FlowAnchor;
+  locationLabel?: string;
 }
 
 // A region of a page, in the same scaled coordinates as a highlight's
@@ -124,6 +127,10 @@ export function attachmentImages(attachments: Attachment[]): RegionImage[] {
 // page without flashing a passage.
 export function attachmentSources(attachments: Attachment[], index: DocumentTextIndex | null): SourceRef[] {
   return attachments.flatMap((attachment): SourceRef[] => {
+    if (attachment.location && attachment.range && attachment.pageNumber !== undefined) {
+      return [{ label: "", pageNumber: attachment.pageNumber, start: attachment.range[0], end: attachment.range[1], text: attachment.text,
+        location: attachment.location, locationLabel: attachment.locationLabel }];
+    }
     if (attachment.kind === "region") {
       // Its text, if the region had any: already located when it was added.
       if (!attachment.range || !attachment.text || attachment.pageNumber === undefined) return [];
@@ -158,7 +165,7 @@ export function attachmentInstructions(
   const lines: string[] = [];
   const regions = attachments.filter((a) => a.kind === "region" && a.image);
   if (regions.length) {
-    const pages = [...new Set(regions.map((a) => `p. ${pageLabel(a.pageNumber ?? 0)}`))].join(", ");
+    const pages = [...new Set(regions.map((a) => a.locationLabel || `p. ${pageLabel(a.pageNumber ?? 0)}`))].join(", ");
     lines.push(
       `The reader attached ${regions.length === 1 ? "an image of a region" : `${regions.length} images of regions`} of the document (${pages}), sent with their message. Read ${regions.length === 1 ? "it" : "them"} for what the text can't show — figures, equations, tables.`,
     );
@@ -185,8 +192,8 @@ export function attachmentQuery(attachments: Attachment[]): string {
 // How an attachment reads in a chip: "p. 42 · “The first words…”",
 // "p. 42 · Region".
 export function attachmentLabel(attachment: Attachment, pageLabel: (pageNumber: number) => string): string {
-  if (attachment.kind === "region") return `p. ${pageLabel(attachment.pageNumber ?? 0)} · Region`;
-  const where = attachment.kind === "document" && attachment.pageNumber !== undefined ? `p. ${pageLabel(attachment.pageNumber)}` : "From answer";
+  if (attachment.kind === "region") return attachment.locationLabel ? `${attachment.locationLabel} · Image` : `p. ${pageLabel(attachment.pageNumber ?? 0)} · Region`;
+  const where = attachment.locationLabel || (attachment.kind === "document" && attachment.pageNumber !== undefined ? `p. ${pageLabel(attachment.pageNumber)}` : "From answer");
   const snippet = attachment.text.length > 48 ? `${attachment.text.slice(0, 47)}…` : attachment.text;
   return `${where} · “${snippet}”`;
 }

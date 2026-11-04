@@ -1,4 +1,5 @@
 import type { DocDataKind, DocumentMeta, LibraryStorage } from "./types.ts";
+import type { DocumentFormat } from "../document/model.ts";
 
 // A document's identity is its content: the SHA-256 of its bytes. Renaming
 // or re-saving the file keeps its notes, and importing it twice opens the
@@ -85,6 +86,7 @@ export const READER_DATA_KINDS = [
   "generalNotes",
   "glossary",
   "threads",
+  "nativeAnnotations",
 ] as const satisfies readonly DocDataKind[];
 
 export type ReaderDataKind = (typeof READER_DATA_KINDS)[number];
@@ -97,7 +99,7 @@ export interface OpenedDocument {
 // A file name without its extension: the title a document starts with, and
 // the base of an exported copy's name.
 export function titleFromFileName(fileName: string): string {
-  return fileName.replace(/\.(pdf|epub)$/i, "") || fileName;
+  return fileName.replace(/\.(pdf|epub|md|markdown|html?)$/i, "") || fileName;
 }
 
 // Adds the PDF to the library if it isn't there yet — or brings back its
@@ -108,7 +110,7 @@ export function titleFromFileName(fileName: string): string {
 // who has the PDF parsed (see library/pdfInfo.ts).
 export async function importDocument(
   storage: LibraryStorage,
-  input: { bytes: Uint8Array; fileName: string; docId?: string; open?: boolean },
+  input: { bytes: Uint8Array; fileName: string; docId?: string; open?: boolean; format?: DocumentFormat },
 ): Promise<{ meta: DocumentMeta; added: boolean }> {
   const docId = input.docId ?? (await computeDocId(input.bytes));
   const now = new Date().toISOString();
@@ -121,10 +123,10 @@ export async function importDocument(
     return { meta, added: false };
   }
   // The file first: meta without fileMissing must imply the PDF is there.
-  await storage.putFile(docId, input.bytes);
+  await storage.putFile(docId, input.bytes, input.format ?? existing?.format);
   if (existing) {
     const { fileMissing: _restored, ...rest } = existing;
-    meta = { ...rest, byteLength: input.bytes.byteLength, ...(input.open ? { openedAt: now } : {}) };
+    meta = { ...rest, ...(input.format ? { format: input.format } : {}), byteLength: input.bytes.byteLength, ...(input.open ? { openedAt: now } : {}) };
   } else {
     meta = {
       docId,
@@ -134,6 +136,7 @@ export async function importDocument(
       addedAt: now,
       // Never opened yet: the library's "Continue reading" skips it.
       openedAt: input.open ? now : "",
+      ...(input.format ? { format: input.format } : {}),
     };
   }
   await storage.putMeta(meta);

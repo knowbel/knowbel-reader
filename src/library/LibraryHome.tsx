@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Download, FolderOpen, Globe, MoreHorizontal, Plus, Search, Settings, Upload } from "lucide-react";
 import type { DocumentMeta, LibraryStorage } from "../storage/types";
 import {
@@ -11,10 +11,12 @@ import {
   type LibrarySort,
 } from "./library";
 import { importFiles } from "./importFiles";
+import { DOCUMENT_FILE_ACCEPT } from "../document/registry";
 import { canRevealFiles, revealInFileManager } from "./desktop";
-import AddFromUrlDialog from "../web/AddFromUrlDialog";
-import SettingsDialog from "../settings/SettingsDialog";
 import { looksLikeUrl } from "../web/url";
+
+const AddFromUrlDialog = lazy(() => import("../web/AddFromUrlDialog"));
+const SettingsDialog = lazy(() => import("../settings/SettingsDialog"));
 
 // The library: every PDF and EPUB the reader has added, what they were last reading,
 // and the way to add more — files, or pages from the web (src/web/). Replaces
@@ -251,7 +253,7 @@ export default function LibraryHome({
           <option value="added">Recently added</option>
           <option value="title">Title</option>
         </select>
-        <button type="button" className="library-add" onClick={() => fileInputRef.current?.click()} title="Add PDFs or EPUBs (⌘O)">
+        <button type="button" className="library-add" onClick={() => fileInputRef.current?.click()} title="Add PDFs, EPUBs or Markdown (⌘O)">
           <Plus width={16} height={16} /> Add books
         </button>
         <button
@@ -300,7 +302,7 @@ export default function LibraryHome({
         <input
           ref={fileInputRef}
           type="file"
-          accept="application/pdf,.pdf,application/epub+zip,.epub"
+          accept={DOCUMENT_FILE_ACCEPT}
           multiple
           hidden
           onChange={(event) => {
@@ -334,9 +336,9 @@ export default function LibraryHome({
         {documents === null ? null : documents.length === 0 ? (
           <button type="button" className="library-empty" onClick={() => fileInputRef.current?.click()}>
             <Plus width={28} height={28} />
-            <span className="library-empty-title">Add your first PDF or EPUB</span>
+            <span className="library-empty-title">Add your first document</span>
             <span className="library-empty-hint">
-              Drop PDFs or EPUBs anywhere here, or click to choose files. To save a web page, paste its link.
+              Drop PDFs, EPUBs or Markdown anywhere here, or click to choose files. To save a web page, paste its link.
             </span>
           </button>
         ) : (
@@ -367,10 +369,11 @@ export default function LibraryHome({
 
       {dragging ? (
         <div className="library-drop-overlay" aria-hidden="true">
-          Drop PDFs, EPUBs or links to add them
+          Drop PDFs, EPUBs, Markdown or links to add them
         </div>
       ) : null}
 
+      <Suspense fallback={null}>
       {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
       {urlDialog ? (
         <AddFromUrlDialog
@@ -385,6 +388,7 @@ export default function LibraryHome({
           }}
         />
       ) : null}
+      </Suspense>
     </div>
   );
 }

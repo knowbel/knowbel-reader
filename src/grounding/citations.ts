@@ -185,6 +185,18 @@ export function chipLabel(kind: CitationGroup["kind"], pages: string[]): string 
   return `${unique.length > 1 ? "pp." : "p."} ${unique.join(", ")}`;
 }
 
+export function sourceLabel(source: SourceRef, pageLabel: (page: number) => string): string {
+  return source.locationLabel || `p. ${pageLabel(source.pageNumber)}`;
+}
+
+export function sourceChipLabel(kind: CitationGroup["kind"], sources: SourceRef[], pageLabel: (page: number) => string): string {
+  if (sources.some((source) => source.location)) {
+    if (kind === "general" || kind === "unverified") return kind;
+    return [...new Set(sources.map((source) => sourceLabel(source, pageLabel)))].join(", ");
+  }
+  return chipLabel(kind, sources.map((source) => pageLabel(source.pageNumber)));
+}
+
 // The answer with each citation group replaced by a chip — an empty
 // markdown link, `[](#cite:… "p. 42")`. Empty so the chip adds no text to
 // the rendered markdown (dive selections and highlights count characters in
@@ -211,7 +223,7 @@ export function toChipMarkdown(
         return { label: source.label, start, end };
       }),
     });
-    const title = chipLabel(group.kind, cited.map((source) => pageLabel(source.pageNumber))).replace(/"/g, "'");
+    const title = sourceChipLabel(group.kind, cited, pageLabel).replace(/\\/g, "\\\\").replace(/["\n\r]/g, "'");
     // Covers every marker the group merged.
     for (const [start] of parsed.markers) if (start > group.start && start < group.end) replacements.delete(start);
     replacements.set(group.start, { end: group.end, value: `[](${target} "${title}")` });
@@ -245,12 +257,11 @@ export function markersToPages(text: string, sources: SourceRef[], pageLabel: (p
   return text
     .replace(MARKER, (_match, _inferred, ids: string | undefined) => {
       if (!ids) return "";
-      const pages = ids
+      const cited = ids
         .split(",")
         .map((id) => byLabel.get(id.trim().toUpperCase()))
-        .filter((source): source is SourceRef => Boolean(source))
-        .map((source) => pageLabel(source.pageNumber));
-      return pages.length ? ` (${chipLabel("stated", pages)})` : "";
+        .filter((source): source is SourceRef => Boolean(source));
+      return cited.length ? ` (${sourceChipLabel("stated", cited, pageLabel)})` : "";
     })
     .replace(/ +([.,;:!?])/g, "$1")
     .replace(/[ \t]{2,}/g, " ")

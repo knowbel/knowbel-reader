@@ -12,6 +12,20 @@
   overflow: hidden;
 }
 
+.reader-error {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.reader-error p { margin: 0; max-width: 60ch; overflow-wrap: anywhere; }
+
 /* Everything right of the rail: the normal workspace or Deep Dive. */
 .app-main {
   display: flex;
@@ -820,17 +834,56 @@
   gap: 6px;
 }
 
-/* Built from the library's own toolbar button classes
-   (.TextHighlight__copy-button etc.), so it matches its look. */
+/* Own the action sizing here so native documents have the same controls
+   before and after the PDF viewer's optional stylesheet loads. */
 .highlight-toolbar__row {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
   padding: 4px 6px;
   background: var(--rphp-toolbar-bg, #1c1b18);
   border-radius: var(--rphp-radius, 9px);
   box-shadow: var(--rphp-shadow-lg, 0 8px 24px -6px rgba(28, 27, 24, 0.22));
   white-space: nowrap;
+}
+
+.highlight-toolbar__row > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  width: auto;
+  min-width: 28px;
+  height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--rphp-radius-sm, 6px);
+  background: transparent;
+  color: #efece5;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.highlight-toolbar__row > button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  box-shadow: none;
+}
+
+.highlight-toolbar__row > button:is(.TextHighlight__delete-button, .AreaHighlight__delete-button):hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.24);
+  color: #ff8a80;
+}
+
+.highlight-toolbar__row > button:disabled {
+  color: rgba(239, 236, 229, 0.5);
+  cursor: default;
 }
 
 /* Style + color row: one row combining the highlight/underline/strikethrough
@@ -953,31 +1006,6 @@
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-}
-
-/* The highlight toolbar's other buttons (style/copy/comment/delete) are
-   fixed 26x26 icon slots on a dark pill; the dive badge shows text instead
-   of an icon, so it's restyled to match that context — the library's own
-   dark-toolbar tokens, not this app's palette — rather than the blue pill
-   used in the sidebar/selection popover. */
-.highlight-toolbar__row .dive-badge {
-  height: 26px;
-  padding: 0 8px;
-  border: none;
-  border-radius: var(--rphp-radius-sm, 6px);
-  background: transparent;
-  color: #efece5;
-  font-size: 0.75rem;
-}
-
-.highlight-toolbar__row .dive-badge:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
-}
-
-.highlight-toolbar__row .dive-badge:disabled {
-  color: rgba(239, 236, 229, 0.5);
-  cursor: default;
 }
 
 /* The library sizes comment/style/copy/delete buttons as fixed 26x26 icon

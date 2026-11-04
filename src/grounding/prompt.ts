@@ -11,7 +11,8 @@ export function renderSources(sources: SourceRef[], pageLabel: (pageNumber: numb
       // block is exactly as before.
       const is = source.is ? ` is="${source.is.replace(/"/g, "'")}"` : "";
       const sec = source.section ? ` sec="${source.section.replace(/"/g, "'")}"` : "";
-      return `<source id="${source.label}" p="${pageLabel(source.pageNumber)}"${is}${sec}>${source.text}</source>`;
+      const where = source.locationLabel ? `at="${source.locationLabel.replace(/["<>]/g, "'")}"` : `p="${pageLabel(source.pageNumber)}"`;
+      return `<source id="${source.label}" ${where}${is}${sec}>${source.text}</source>`;
     })
     .join("\n");
 }
@@ -31,4 +32,4 @@ export const GROUNDING_RULES = `How to answer:
 export const MATH_RULES = `Formatting: markdown with KaTeX math.
 - Write every mathematical expression, even a lone variable, as LaTeX in $...$ — never raw ^, unicode superscripts or subscripts, √, Σ, ⟩, or bare Greek letters.
 - Put any equation that matters on its own line as $$...$$, with a blank line before and after.
-- Formulas in the sources come from the PDF's extracted text and are often garbled (superscripts flattened, symbols split apart). Reconstruct the intended formula as proper LaTeX; never copy formula text from a source as is.`;
+- Preserve valid TeX from native text sources. Formulas extracted from PDFs may be garbled (superscripts flattened, symbols split apart); reconstruct their intended notation as proper LaTeX.`;

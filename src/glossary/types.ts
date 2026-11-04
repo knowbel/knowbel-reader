@@ -1,4 +1,5 @@
 import type { ScaledPosition } from "react-pdf-highlighter-plus";
+import type { FlowAnchor } from "../document/model.ts";
 import type { NotationMeaning } from "../notation/symbols";
 
 // How the definition was arrived at, shown as a badge so the reader knows
@@ -46,7 +47,9 @@ export interface GlossaryRef {
   before: string;
   match: string;
   after: string;
-  position: ScaledPosition;
+  position?: ScaledPosition;
+  location?: FlowAnchor;
+  locationLabel?: string;
 }
 
 export interface GlossaryEntry {

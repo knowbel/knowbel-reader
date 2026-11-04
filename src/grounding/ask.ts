@@ -153,7 +153,7 @@ export function buildAskSystem(params: {
     : "";
   // Sources first and fixed across a thread's follow-ups, so a large context
   // is a stable prefix the provider can serve from its prompt cache.
-  return `You help a reader study a PDF titled "${fileName}". Answer their question using these passages from it.${where}${partial}
+  return `You help a reader study a document titled "${fileName}". Answer their question using these passages from it.${where}${partial}
 
 Sources from the document:
 ${sources.length ? renderSources(sources, pageLabel) : "(none — no passage of the document addresses this)"}
