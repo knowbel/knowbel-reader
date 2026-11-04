@@ -78,3 +78,11 @@ export function anchorLabel(document: FlowDocument, anchor: FlowAnchor): string 
   const block = lookup(document).blocks.get(id);
   return block?.section || document.title;
 }
+
+// Anchor identity ignores saved quotation/context metadata. Used to reopen the
+// same passage's existing conversation rather than creating duplicate dives.
+export function sameAnchor(a: FlowAnchor, b: FlowAnchor): boolean {
+  if (a.kind === "object") return b.kind === "object" && a.blockId === b.blockId && a.objectId === b.objectId;
+  return b.kind === "text" && a.start.blockId === b.start.blockId && a.start.offset === b.start.offset &&
+    a.end.blockId === b.end.blockId && a.end.offset === b.end.offset;
+}

@@ -533,6 +533,8 @@
   display: flex;
   flex-direction: column;
   width: 360px;
+  min-width: 260px;
+  max-width: 38vw;
   min-height: 0;
 }
 
@@ -1417,12 +1419,16 @@
   flex-shrink: 0;
 }
 
-.annot-card-page {
+.annot-card-location {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .annot-dive-link {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 0.2rem;
@@ -3156,6 +3162,9 @@
    is generated content, so it's never part of a text selection. */
 .cite-chip {
   display: inline-block;
+  max-width: 95%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin: 0 0.1em 0 0.25em;
   padding: 0 0.4em;
   border: 1px solid var(--border);
@@ -3243,7 +3252,7 @@
   color: var(--link);
   font-size: 0.78rem;
   font-weight: 600;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .cite-preview-text mark {
@@ -4893,4 +4902,8 @@
   overflow-y: auto;
   padding: 0.75rem 1.25rem 1.5rem;
   line-height: 1.55;
+}
+
+@media (max-width: 760px) {
+  .sidebar-panel { width: 280px; min-width: 220px; max-width: 45vw; }
 }

@@ -67,6 +67,7 @@ var busy = false
 var opened = false
 var index = 0
 var ticks = 0
+var annotationUI: String?
 let timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
   if busy { return }
   ticks += 1
@@ -77,7 +78,8 @@ let timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
 JSON.stringify({library: !!document.querySelector('.library-card-open'), empty: !!document.querySelector('.library-empty'),
   body: document.body?.innerText ?? '', core: !!window.pdfjsLib, native: !!document.querySelector('.native-reader'),
   canvas: [...document.querySelectorAll('.PdfHighlighter canvas')].some(c => c.width > 0 && c.height > 0 && c.getBoundingClientRect().width > 0),
-  controls: !!document.querySelector('.page-nav')})
+  controls: !!document.querySelector('.page-nav'), annotations: !!document.querySelector('.annot-header'),
+  annotationUI: JSON.stringify([document.querySelector('.annot-header')?.innerHTML, document.querySelector('.annot-empty-tips')?.innerHTML, document.querySelector('.sidebar-collapse-button')?.outerHTML, document.querySelector('.sidebar-panel')?.getBoundingClientRect().width])})
 """
   ) { value, error in
     defer { busy = false }
@@ -121,8 +123,12 @@ window.__seed.then(() => location.reload()); undefined;
     }
     let native = fixture["native"] as! Bool
     let rendered = native ? state["native"] as? Bool == true : state["canvas"] as? Bool == true && state["controls"] as? Bool == true
-    if opened && rendered && (state["body"] as? String ?? "").contains(fixture["expect"] as! String) {
+    if opened && rendered && state["annotations"] as? Bool == true && (state["body"] as? String ?? "").contains(fixture["expect"] as! String) {
       if native && state["core"] as? Bool == true { print("FAIL: Markdown loaded PDF.js"); exit(1) }
+      if let signature = state["annotationUI"] as? String {
+        if let expected = annotationUI, signature != expected { print("FAIL: annotation panel UI differs between formats"); exit(1) }
+        annotationUI = signature
+      }
       print("PASS:", meta["title"]!, "rendered after cold reload")
       index += 1
       if index == fixtures.count { print("Desktop WebKit regression checks passed."); exit(0) }

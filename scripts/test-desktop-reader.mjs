@@ -27,7 +27,7 @@ try {
     const meta = {
       docId: createHash("sha256").update(bytes).digest("hex"), title, fileName, byteLength: bytes.length,
       addedAt: "2026-11-04T00:00:00Z", openedAt: "", pageCount: 3, lastPage: 2,
-      view: { zoom: "auto", twoPage: false, continuous: true, panel: "toc" },
+      view: { zoom: "auto", twoPage: false, continuous: true, panel: "annotations" },
       ...(kind === "Web" ? { source: { kind: "web", format: "article", url: "https://example.invalid/article", finalUrl: "https://example.invalid/article", canonicalUrl: "https://example.invalid/article", fetchedAt: "2026-11-04T00:00:00Z" } } : {}),
     };
     // Legacy EPUB and article imports store PDF bytes, with no native format.
@@ -37,6 +37,7 @@ try {
   fixtures.push({ meta: {
     docId: createHash("sha256").update(bytes).digest("hex"), title: "Markdown cold reopen", fileName: "fixture.md", format: "markdown",
     byteLength: bytes.length, addedAt: "2026-11-04T00:00:00Z", openedAt: "",
+    view: { zoom: "auto", twoPage: false, continuous: true, panel: "annotations" },
   }, bytes: Array.from(bytes), expect: "Native Markdown still works.", native: true });
   const fixturePath = join(temporary, "fixtures.json");
   await writeFile(fixturePath, JSON.stringify(fixtures));

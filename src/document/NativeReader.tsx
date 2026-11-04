@@ -7,8 +7,9 @@ import type { DocumentMeta } from "../storage/types";
 import { DOCUMENT_FILE_ACCEPT, parseDocument, releaseDocument } from "./registry";
 import { DocumentEngine } from "./engine";
 import type { DocumentAnnotation, FlowAnchor, TextPoint } from "./model";
-import { anchorLabel, anchorText, textAnchor } from "./anchors";
+import { anchorLabel, anchorText, sameAnchor, textAnchor } from "./anchors";
 import FlowView, { type FlowSelection, type FlowGlossaryMark } from "./FlowView";
+import SidebarFrame from "../components/SidebarFrame";
 import AppRail, { type HighlightPen, type Tool } from "../components/AppRail";
 import type { SidebarPanel } from "../components/Sidebar";
 import FloatingTip from "../components/FloatingTip";
@@ -33,6 +34,7 @@ import { addAttachment, ATTACHMENT_MAX_CHARS, makeAttachment, type Attachment } 
 import { importFiles } from "../library/importFiles";
 import "./reader.css";
 
+const NativeAnnotationsPanel = lazy(() => import("./NativeAnnotationsPanel"));
 const AskPanel = lazy(() => import("../ask/AskPanel"));
 const GlossaryPanel = lazy(() => import("../components/GlossaryPanel"));
 const GlossaryCard = lazy(() => import("../glossary/GlossaryCard"));
@@ -110,6 +112,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   });
   const [scale, setScale] = useState(session.meta.textScale ?? 100);
   const [notesCollapsed, setNotesCollapsed] = useState(false);
+  const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
   const [pendingStickerId, setPendingStickerId] = useState<string | null>(null);
   const [selection, setSelection] = useState<FlowSelection | null>(null);
   const [tipGlossaryId, setTipGlossaryId] = useState<string | null>(null);
@@ -139,7 +142,6 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   const history = useRef<{ back: FlowAnchor[]; forward: FlowAnchor[] }>({ back: [], forward: [] });
   const [, updateHistory] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
-  const noteDraft = useRef<HTMLTextAreaElement>(null);
   const { theme, toggleTheme } = useTheme();
   const glossaryEntries = useGlossaryEntries(glossary);
   const glossaryProjection = useRef<{ sources: GlossaryEntry["refs"][]; marks: FlowGlossaryMark[] }>({ sources: [], marks: [] });
@@ -211,8 +213,8 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     setAnnotations(next);
     writer.schedule(model.id, "nativeAnnotations", next);
   });
-  const changePins = (next: Pin[]) => { setPins(next); writer.schedule(model.id, "pins", next); };
-  const changeNotes = (next: GeneralNote[]) => { setNotes(next); writer.schedule(model.id, "generalNotes", next); };
+  const changePins = useEvent((next: Pin[]) => { setPins(next); writer.schedule(model.id, "pins", next); });
+  const changeNotes = useEvent((next: GeneralNote[]) => { setNotes(next); writer.schedule(model.id, "generalNotes", next); });
   const closeTip = useCallback(() => { setSelection(null); setTipGlossaryId(null); }, []);
   const placeHere = () => {
     const point = metaRef.current.readingPosition;
@@ -318,8 +320,14 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       setPanel("ask"); setAskFocus((n) => n + 1);
     })().catch((error) => { if (!controller.current.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't attach this selection."); }));
   };
-  const dive = (anchor: FlowAnchor) => {
+  const dive = useEvent((anchor: FlowAnchor) => {
     closeTip();
+    const existing = askStore.getSnapshot().find((thread) => thread.mode === "dive" && !thread.parentThreadId && thread.anchor && sameAnchor(thread.anchor, anchor));
+    if (existing) {
+      goTo(anchor);
+      setOpenThreadId(existing.id); setPanel("ask"); setAskFocus((n) => n + 1);
+      return;
+    }
     trackJob((async () => {
       const attached = await selectedAttachments(anchor);
       if (controller.current.signal.aborted) return;
@@ -330,7 +338,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       setOpenThreadId(thread.id); setPanel("ask"); setAskFocus((n) => n + 1);
       await ask(askStore, thread.id, "Explain the selected passage or image and how it connects to the surrounding document.", getAskContext(), { attachments: attached });
     })().catch((error) => { if (!controller.current.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't start this dive."); }));
-  };
+  });
   const diveFromAnswer = (text: string, sources: SourceRef[]) => {
     const parent = openThreadId ? askStore.get(openThreadId) : undefined;
     const attached = sources.slice(0, 4).map((source): Attachment => ({ id: crypto.randomUUID(), kind: "document", text: source.text,
@@ -374,6 +382,21 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     return () => window.removeEventListener("keydown", key);
   }, [closeTip, model.id, openFile, writer, goHistory]);
 
+  const openAnnotationDive = useEvent((threadId: string) => {
+    const thread = askStore.get(threadId);
+    if (!thread || thread.mode !== "dive") return;
+    if (thread.anchor) goTo(thread.anchor);
+    setOpenThreadId(thread.id); setPanel("ask"); setAskFocus((n) => n + 1);
+  });
+  const deleteAnnotation = useEvent((id: string) => changeAnnotations(annotations.filter((item) => item.id !== id)));
+  const editAnnotation = useEvent((id: string, comment: string) => changeAnnotations(annotations.map((item) => item.id === id ? { ...item, comment } : item)));
+  const deletePin = useEvent((id: string) => changePins(pins.filter((item) => item.id !== id)));
+  const editPin = useEvent((id: string, comment: string) => changePins(pins.map((item) => item.id === id ? { ...item, comment } : item)));
+  const addNote = useEvent((text: string) => changeNotes([{ id: crypto.randomUUID(), text, createdAt: new Date().toISOString() }, ...notes]));
+  const editNote = useEvent((id: string, text: string) => changeNotes(notes.map((item) => item.id === id ? { ...item, text } : item)));
+  const deleteNote = useEvent((id: string) => changeNotes(notes.filter((item) => item.id !== id)));
+  const handledStickerEdit = useCallback(() => setPendingStickerId(null), []);
+
   const selectedAnnotation = selection?.annotationId ? annotations.find((entry) => entry.id === selection.annotationId) : undefined;
   return <div className="app-shell native-reader" onDragOver={(event) => { if ([...event.dataTransfer.types].includes("Files")) event.preventDefault(); }}
     onDrop={(event) => { if (event.dataTransfer.files.length) { event.preventDefault(); void openFile(event.dataTransfer.files[0]); } }}>
@@ -387,8 +410,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
         twoPageView: false, continuousScroll: true, onToggleTwoPageView: () => {}, onToggleContinuousScroll: () => {},
         notesCollapsed, onToggleNotesCollapsed: () => setNotesCollapsed((value) => !value), theme, onToggleTheme: toggleTheme }} />
     <input ref={fileRef} type="file" accept={DOCUMENT_FILE_ACCEPT} hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void openFile(file); event.target.value = ""; }} />
-    {panel ? <aside className="sidebar native-sidebar"><div className="sidebar-panel">
-      <button type="button" className="sidebar-collapse-button" title="Collapse panel" aria-label="Collapse panel" onClick={() => setPanel(null)}>‹</button>
+    {panel ? <SidebarFrame onClose={() => setPanel(null)}>
       <Suspense fallback={<p className="sidebar-empty" role="status">Loading…</p>}>
         {panel === "ask" ? <AskPanel reflowable store={askStore} getContext={getAskContext} hasDocument pageLabels={null} openThreadId={openThreadId} onOpenThread={setOpenThreadId}
           onJob={trackJob} onReturnToPassage={(thread) => { if (thread.anchor) goTo(thread.anchor); }}
@@ -417,24 +439,17 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
             {deferredQuery.trim() ? <p className="sidebar-hint">{searchMatches.length === 200 ? "First 200" : searchMatches.length} matches</p> : <p className="sidebar-empty">Search the document’s text.</p>}
             {searchMatches.map((match, index) => <button type="button" key={index} onClick={() => goTo(match.anchor)}><small>{anchorLabel(model, match.anchor)}</small>
               {match.before}<mark>{match.match}</mark>{match.after}</button>)}
-          </div></> : <>
-          <header className="sidebar-header"><h2>Annotations</h2><span>{annotations.length}</span></header>
-          <div className="sidebar-list flow-annotation-list">
-            {!annotations.length ? <p className="sidebar-empty">Select a passage to highlight or comment. Right-click a passage to place a sticky note.</p> : annotations.map((annotation) => <div className="flow-annotation" key={annotation.id}>
-              <button type="button" className="flow-annotation-jump" onClick={() => goTo(annotation.anchor)}><small>{annotation.kind === "sticker" ? "Sticky note · " : ""}{anchorLabel(model, annotation.anchor)}</small>{annotation.text.slice(0, 180) || "Image"}</button>
-              <textarea aria-label={annotation.kind === "sticker" ? "Sticky note text" : "Annotation comment"} defaultValue={annotation.comment} key={`${annotation.id}-${annotation.comment}`} placeholder="Add a note…"
-                autoFocus={annotation.id === pendingStickerId} onFocus={() => setPendingStickerId(null)}
-                onBlur={(event) => { if (event.target.value !== annotation.comment) changeAnnotations(annotations.map((item) => item.id === annotation.id ? { ...item, comment: event.target.value } : item)); }} />
-              <div className="flow-row-actions"><button type="button" onClick={() => dive(annotation.anchor)}>Deep Dive</button><button type="button" onClick={() => changeAnnotations(annotations.filter((item) => item.id !== annotation.id))}>Delete</button></div>
-            </div>)}
-            <h3>Notes</h3>
-            <textarea ref={noteDraft} aria-label="New document note" placeholder="Write a document note…" />
-            <button type="button" onClick={() => { const text = noteDraft.current?.value.trim(); if (text) { changeNotes([{ id: crypto.randomUUID(), text, createdAt: new Date().toISOString() }, ...notes]); noteDraft.current!.value = ""; } }}>Add note</button>
-            {notes.map((note) => <div key={note.id} className="flow-annotation"><textarea aria-label="Document note" defaultValue={note.text} onBlur={(event) => changeNotes(notes.map((item) => item.id === note.id ? { ...item, text: event.target.value } : item))} /><button type="button" onClick={() => changeNotes(notes.filter((item) => item.id !== note.id))}>Delete</button></div>)}
-            {pins.length ? <h3>Pinned passages</h3> : null}{pins.map((pin) => <div key={pin.id} className="flow-annotation"><small>{pin.context}</small><p>{pin.text}</p><button type="button" onClick={() => changePins(pins.filter((item) => item.id !== pin.id))}>Unpin</button></div>)}
-          </div></>}
+          </div></> : <NativeAnnotationsPanel
+          engine={engine} annotations={annotations} pins={pins} notes={notes} askStore={askStore} currentUnit={currentUnit}
+          activeId={selection?.annotationId ?? annotations.find((item) => item.anchor === flash)?.id}
+          editRequestId={pendingStickerId} onEditRequestHandled={handledStickerEdit}
+          onOpen={goTo} onHover={setHoveredAnnotationId} onDelete={deleteAnnotation} onEdit={editAnnotation} onOpenDive={openAnnotationDive}
+          onDeletePin={deletePin} onEditPin={editPin} onAddNote={addNote} onEditNote={editNote} onDeleteNote={deleteNote}
+          onJumpToSource={jumpSource} />}
+
       </Suspense>
-    </div></aside> : null}
+    </SidebarFrame> : null}
+    {hoveredAnnotationId ? <style>{`.native-reader [data-annotation-id="${CSS.escape(hoveredAnnotationId)}"] { box-shadow: 0 0 0 2px var(--rphp-accent, #5b50e6); }`}</style> : null}
     <main className="app-main">
       <header className="flow-header"><button type="button" aria-label="Back" title="Back (⌘←)" disabled={!history.current.back.length} onClick={() => goHistory("back")}>←</button>
         <button type="button" aria-label="Forward" title="Forward (⌘→)" disabled={!history.current.forward.length} onClick={() => goHistory("forward")}>→</button>

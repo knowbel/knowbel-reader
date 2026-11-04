@@ -66,6 +66,36 @@ including follow-ups and nested dives from answers. PDF's multi-pane dive tree
 remains in the PDF reader. Images use the shared image-attachment path only
 when selected for a question; tables already supply canonical searchable text.
 
+## Shared annotations panel
+
+`components/AnnotationsPanel.tsx` owns the cards, search, type/color/note/location
+filters, document/recent sorting, note editor and Markdown export for both
+readers. `annotations/model.ts` defines its format-neutral rows and section
+boundaries, plus common pin/general-note rows. A row supplies an ordered
+position, display label and edit/delete/navigation callbacks; the panel never
+reads PDF rectangles or native anchors.
+
+`components/PdfAnnotationsPanel.tsx` projects PDF highlights, sticky notes,
+dive highlights and outline chapters into those rows. `document/annotationRows.ts`
+projects native text/object annotations and heading sections; native sticky
+cards display and edit the note's own content. Image/table annotations use area
+cards. Unresolved anchors remain editable in the panel. Native panel edits use
+the existing save/undo path, and new sticky notes open their editor immediately.
+Both readers use the same `AnnotationCard`, Save/Cancel editors, action
+buttons, filters, sort controls, help text and `SidebarFrame` (including the
+collapse control and responsive sizing). Adapters supply data and callbacks,
+with no UI overrides. Hovering a card outlines its source annotation in either
+reader. The Dive badge appears only for annotations with an associated
+conversation and opens that existing dive; new dives start from the selection
+tooltip.
+Location text reflects the document: PDF page labels or native section names.
+Storage formats stay unchanged.
+
+New native format adapters inherit this panel through `NativeReader` without
+adding UI. A reader with a different anchor model can supply its own row
+projection. PDF outline hooks stay in the PDF adapter, and the native panel
+loads on demand without importing the PDF runtime.
+
 ## Storage and performance
 
 Both backends retain original Markdown bytes. Desktop native sources use
@@ -100,7 +130,9 @@ geometry polling, OCR, headless conversion, new editor framework or UI kit.
 
 `npm test` covers parsing, semantic objects, canonical offsets, Unicode,
 anchors, retrieval, citations, original-byte storage, deduplication, backup
-relinking and save flushing, alongside the existing PDF suite.
+relinking and save flushing, alongside the existing PDF suite. Shared-panel
+checks cover anchor projections, ordering, section boundaries, unresolved
+locations and pin/note edit routing.
 
 `npm run test:reader` exercises the browser using Node's built-in WebSocket
 and Chrome's debugging protocol. Start Vite on port 5178 and a headless

@@ -1,7 +1,8 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { CommentedHighlight } from "../types";
 import type { DiveHighlight, DivePanel, GeneralNote, Pin } from "../deepdive/types";
-import AnnotationsPanel from "./AnnotationsPanel";
+import SidebarFrame from "./SidebarFrame";
+import PdfAnnotationsPanel from "./PdfAnnotationsPanel";
 import TableOfContentsPanel from "./TableOfContentsPanel";
 import GlossaryPanel, { type GlossaryFocusRequest } from "./GlossaryPanel";
 import SearchPanel, { type SearchMatch } from "./SearchPanel";
@@ -66,14 +67,6 @@ interface SidebarProps {
   onPin: (text: string, context: string) => void;
 }
 
-function ChevronIcon({ direction }: { direction: "left" | "right" }) {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <polyline points={direction === "left" ? "15 6 9 12 15 18" : "9 6 15 12 9 18"} />
-    </svg>
-  );
-}
-
 export default function Sidebar({
   highlights,
   pins,
@@ -129,19 +122,9 @@ export default function Sidebar({
   if (!activePanel) return null;
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-panel">
-        <button
-          type="button"
-          className="sidebar-collapse-button"
-          onClick={() => onSelectPanel(activePanel)}
-          title="Collapse panel"
-          aria-label="Collapse panel"
-        >
-          <ChevronIcon direction="left" />
-        </button>
+    <SidebarFrame onClose={() => onSelectPanel(activePanel)}>
         {activePanel === "annotations" ? (
-          <AnnotationsPanel
+          <PdfAnnotationsPanel
             highlights={highlights}
             pins={pins}
             panels={panels}
@@ -211,7 +194,6 @@ export default function Sidebar({
             pageLabels={pageLabels}
           />
         )}
-      </div>
-    </aside>
+    </SidebarFrame>
   );
 }
