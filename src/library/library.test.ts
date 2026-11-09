@@ -102,3 +102,48 @@ test("a notes backup round-trips, merges into existing notes, and waits for miss
 
   await assert.rejects(importNotes(target, { something: "else" }), /isn't a Knowbel Reader notes backup/);
 });
+
+test("version 2 notebooks round-trip all rich data and merge into an unmigrated library without hiding its existing writing", async () => {
+  const { NotebookStore } = await import('../notebook/store.ts');
+  const { richText } = await import('../notebook/model.ts');
+  const source = createMemoryStorage();
+  const {meta} = await importDocument(source, {bytes:bytes('rich-notebook'),fileName:'Technical.pdf'});
+  const notebook = new NotebookStore(source); await notebook.load(meta.docId, {});
+  const assetId = notebook.addImageDataUrl('data:image/png;base64,aGVsbG8=', 'figure');
+  const entryId = notebook.addNote('document',undefined,{type:'doc',content:[{type:'image',attrs:{assetId}},{type:'aiExchange',attrs:{id:'inline',question:'Why?',answer:'The source supports it.',status:'complete'}}]});
+  notebook.drafts!.set('ask:thread','An unfinished question'); await notebook.flush();
+  const backup = JSON.parse(JSON.stringify(await exportNotes(source))); assert.equal(backup.version,2);
+  const target = createMemoryStorage();
+  await target.putMeta(meta);
+  await target.putData(meta.docId,'generalNotes',[{id:'existing',text:'Existing unmigrated writing',createdAt:'2026-11-01'}]);
+  await importNotes(target,backup);
+  const stored = await target.getData<any>(meta.docId,'notebook');
+  assert.equal(stored.entries.length,2);
+  assert.ok(stored.entries.some((entry:any)=>richText(entry.body)==='Existing unmigrated writing'));
+  assert.deepEqual(stored.entries.find((entry:any)=>entry.id===entryId).body,backup.documents[0].data.notebook.entries[0].body);
+  assert.deepEqual(await target.getData(meta.docId,'notebookAssets'),notebook.getAssets());
+  assert.equal((await target.getData<any[]>(meta.docId,'readerDrafts'))![0].text,'An unfinished question');
+  await importNotes(target,backup); assert.equal((await target.getData<any>(meta.docId,'notebook')).entries.length,2);
+});
+
+test("old backups merge into migrated notebooks and image conflicts preserve both incoming and current snapshots", async () => {
+  const { NotebookStore } = await import('../notebook/store.ts');
+  const target = createMemoryStorage();
+  const {meta} = await importDocument(target,{bytes:bytes('image-conflict'),fileName:'Image.pdf'});
+  const store = new NotebookStore(target); await store.load(meta.docId,{});
+  const assetId = store.addImageDataUrl('data:image/png;base64,Y3VycmVudA==','figure');
+  store.addNote('document',undefined,{type:'doc',content:[{type:'image',attrs:{assetId}}]}); await store.flush();
+  const incoming = createMemoryStorage(); await incoming.putMeta(meta);
+  const other = new NotebookStore(incoming); await other.load(meta.docId,{});
+  other.addImageDataUrl('data:image/png;base64,aW5jb21pbmc=','figure');
+  const incomingId = other.addNote('document',undefined,{type:'doc',content:[{type:'image',attrs:{assetId:'figure'}}]}); await other.flush();
+  const backup = await exportNotes(incoming); await importNotes(target,backup);
+  const notebook = await target.getData<any>(meta.docId,'notebook');
+  const assets = await target.getData<any[]>(meta.docId,'notebookAssets');
+  assert.equal(assets!.length,2);
+  const remapped = notebook.entries.find((entry:any)=>entry.id===incomingId).body.content[0].attrs.assetId;
+  assert.notEqual(remapped,'figure'); assert.equal(assets!.find(asset=>asset.id===remapped).data,'aW5jb21pbmc=');
+  await importNotes(target,backup); assert.equal((await target.getData<any[]>(meta.docId,'notebookAssets'))!.length,2);
+  await importNotes(target,{format:'knowbelreader-notes',version:1,documents:[{meta,data:{generalNotes:[{id:'legacy',text:'Legacy thought',createdAt:'2026-10-01'}]}}]});
+  assert.ok((await target.getData<any>(meta.docId,'notebook')).entries.some((entry:any)=>entry.id==='note:legacy'));
+});

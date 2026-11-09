@@ -374,7 +374,7 @@ test("writer keeps documents apart and retries after a failed write", async () =
     throw new Error("disk full");
   };
   writer.schedule(DOC_ID, "pins", value);
-  await writer.flush();
+  await assert.rejects(writer.flush(), /disk full/);
   assert.equal(errors.length, 1);
 
   storage.putData = putData;

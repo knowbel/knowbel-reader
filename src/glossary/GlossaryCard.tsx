@@ -3,9 +3,10 @@ import { BookA, Check, ChevronRight, RotateCw } from "lucide-react";
 import { useGlossaryEntry, type GlossaryStore } from "./store";
 import { GlossaryMeaning, OriginBadge } from "./GlossaryParts";
 import { lookupStatusText, refCountText } from "./format";
-import type { GlossaryRef } from "./types";
+import type { GlossaryEntry, GlossaryRef } from "./types";
 
 interface GlossaryCardProps {
+  onSaveToNotebook?: (entry: GlossaryEntry) => void;
   store: GlossaryStore;
   entryId: string;
   onOpenInGlossary: (entryId: string) => void;
@@ -22,6 +23,7 @@ interface GlossaryCardProps {
 // leave their place to see it. The entry is already saved to the glossary
 // panel by the time this appears.
 export default function GlossaryCard({
+  onSaveToNotebook,
   store,
   entryId,
   onOpenInGlossary,
@@ -62,7 +64,7 @@ export default function GlossaryCard({
           {lookupStatusText(entry)}
         </p>
       ) : (
-        <GlossaryMeaning entry={entry} pageLabel={pageLabel} onJumpToRef={onJumpToRef} />
+        <GlossaryMeaning onSaveToNotebook={onSaveToNotebook} entry={entry} pageLabel={pageLabel} onJumpToRef={onJumpToRef} />
       )}
 
       <div className="glossary-card-footer">

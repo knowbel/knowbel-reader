@@ -66,7 +66,7 @@ const ICON_PROPS = { width: 18, height: 18, strokeWidth: 1.6, "aria-hidden": tru
 
 const PANEL_ITEMS: { id: SidebarPanel; label: string; icon: ReactNode }[] = [
   { id: "toc", label: "Table of contents", icon: <TocIcon /> },
-  { id: "annotations", label: "Annotations", icon: <AnnotationsIcon /> },
+  { id: "annotations", label: "Notebook", icon: <AnnotationsIcon /> },
   { id: "glossary", label: "Glossary", icon: <BookA {...ICON_PROPS} /> },
   { id: "search", label: "Search (⌘F)", icon: <Search {...ICON_PROPS} /> },
   { id: "ask", label: "Ask (⌘J)", icon: <MessageSquareText {...ICON_PROPS} /> },
@@ -99,6 +99,7 @@ interface AppRailProps {
   onHome: () => void; // back to the library
   // The panel shown in the sidebar, or null (none open, or in Deep Dive).
   activePanel: SidebarPanel | null;
+  notebookOpen?: boolean;
   onSelectPanel: (panel: SidebarPanel) => void;
   tool: Tool;
   // Picking the active Area or Sticky note tool again cancels it.
@@ -111,6 +112,7 @@ interface AppRailProps {
 export default function AppRail({
   onHome,
   activePanel,
+  notebookOpen,
   onSelectPanel,
   tool,
   onSelectTool,
@@ -129,11 +131,11 @@ export default function AppRail({
         <button
           key={id}
           type="button"
-          className={`app-rail-button${activePanel === id ? " active" : ""}`}
+          className={`app-rail-button${(id === "annotations" ? notebookOpen : activePanel === id) ? " active" : ""}`}
           onClick={() => onSelectPanel(id)}
           title={label}
           aria-label={label}
-          aria-pressed={activePanel === id}
+          aria-pressed={(id === "annotations" ? notebookOpen : activePanel === id)}
         >
           {icon}
         </button>

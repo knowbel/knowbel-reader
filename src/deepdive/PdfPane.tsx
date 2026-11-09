@@ -1,3 +1,4 @@
+import type { NotebookCapture } from "../notebook/model";
 import { useEffect, useRef, useState } from "react";
 import {
   PdfHighlighter,
@@ -65,7 +66,7 @@ export interface PdfPaneProps {
     highlight: GhostHighlight,
     comment: string,
     style?: Pick<CommentedHighlight, "highlightColor" | "highlightStyle">,
-  ) => void;
+  ) => string;
   editHighlight: (id: string, edit: Partial<CommentedHighlight>) => void;
   deleteHighlight: (id: string) => void;
   utilsRef: (utils: PdfHighlighterUtils) => void;
@@ -78,7 +79,8 @@ export interface PdfPaneProps {
     content: GhostHighlight["content"];
     contextText: string;
   }) => void;
-  onPin: (selection: string, contextText: string) => void;
+  onPin: (selection: string, contextText: string, origin?: Partial<NotebookCapture>) => void;
+  onOpenNote: (id: string) => void;
   // Text or an area (fresh selection or existing highlight) added to the
   // next question.
   onAddToQuestion: (content: GhostHighlight["content"], position: ScaledPosition) => void;
@@ -116,6 +118,7 @@ export default function PdfPane({
   pen,
   onFreetextClick,
   addHighlight,
+  onOpenNote,
   editHighlight,
   deleteHighlight,
   utilsRef,
@@ -179,11 +182,12 @@ export default function PdfPane({
     const handleScroll = () => setNoteContextMenu(null);
     document.addEventListener("mousedown", handleMouseDown);
     document.addEventListener("keydown", handleKeyDown);
-    viewerContainerRef.current?.addEventListener("scroll", handleScroll, true);
+    const viewerContainer = viewerContainerRef.current;
+    viewerContainer?.addEventListener("scroll", handleScroll, true);
     return () => {
       document.removeEventListener("mousedown", handleMouseDown);
       document.removeEventListener("keydown", handleKeyDown);
-      viewerContainerRef.current?.removeEventListener("scroll", handleScroll, true);
+      viewerContainer?.removeEventListener("scroll", handleScroll, true);
     };
   }, [noteContextMenu]);
 
@@ -359,6 +363,8 @@ export default function PdfPane({
                   autoHighlight ? undefined : (
                     <ExpandableTip
                       addHighlight={addHighlight}
+                      onOpenNote={onOpenNote}
+                      pen={pen}
                       onDiveDeeper={async (highlight) => {
                         const contextText = await extractPageContext(
                           pdfDocumentRef.current!,
@@ -366,9 +372,11 @@ export default function PdfPane({
                         );
                         onDiveDeeper({ highlight, contextText });
                       }}
-                      onPin={async (selection, pageNumber) => {
-                        const contextText = await extractPageContext(pdfDocumentRef.current!, pageNumber);
-                        onPin(selection, contextText);
+                      onPin={async (selection, pageNumber, ghost) => {
+                        const source = pdfDocumentRef.current!;
+                        const contextText = await extractPageContext(source, pageNumber);
+                        if (source !== pdfDocumentRef.current) return;
+                        onPin(selection, contextText, { position: pageNumber, pdf: ghost ? { ...ghost, id: crypto.randomUUID() } : undefined });
                       }}
                       onAddToQuestion={onAddToQuestion}
                       addToQuestionTitle={addToQuestionTitle}
@@ -383,6 +391,7 @@ export default function PdfPane({
                 style={{ height: "100%" }}
               >
                 <HighlightContainer
+                  onOpenNote={onOpenNote}
                   editHighlight={editHighlight}
                   deleteHighlight={deleteHighlight}
                   notesCollapsed={notesCollapsed}

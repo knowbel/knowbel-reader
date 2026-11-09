@@ -8,6 +8,9 @@ import type { DocumentFormat, TextPoint } from "../document/model.ts";
 // One stored value per kind, so saving highlights never rewrites the (much
 // larger) dive history.
 export type DocDataKind =
+  | "notebook"
+  | "notebookAssets"
+  | "readerDrafts"
   | "highlights"
   | "dives"
   | "pins"
@@ -20,6 +23,9 @@ export type DocDataKind =
   | "thumbnail"; // the library card's cover: page 1, as a JPEG data URL
 
 export const DOC_DATA_KINDS: readonly DocDataKind[] = [
+  "notebook",
+  "notebookAssets",
+  "readerDrafts",
   "highlights",
   "dives",
   "pins",
@@ -38,6 +44,7 @@ export interface ReadingView {
   twoPage: boolean;
   continuous: boolean;
   panel: string | null; // the sidebar panel open, if any
+  notebookOpen?: boolean;
   threadId?: string | null; // native reader's open study thread
 }
 

@@ -1,3 +1,5 @@
+import { useNotebook } from "../notebook/context";
+import { saveNotebookExcerpt } from "../notebook/capture";
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import AnswerMarkdown from "../grounding/AnswerMarkdown";
@@ -28,6 +30,7 @@ export default function TreeSummaryPanel({
   onCancel: () => void;
   onClose: () => void;
 }) {
+  const notebook = useNotebook();
   const [copied, setCopied] = useState(false);
   const started = useRef(false);
 
@@ -66,6 +69,7 @@ export default function TreeSummaryPanel({
           <span className="tree-summary-passage">{root.label || "Selected region"}</span>
         </div>
         <div className="tree-summary-actions">
+          {summary && !busy && notebook ? <button type="button" className="answer-more" onClick={() => void saveNotebookExcerpt(notebook.store, summary.content, { context: `Dive summary · ${root.label}`, sources: summary.sources, conversationId: root.id, position: root.pageNumber })}>Add to notebook</button> : null}
           {summary && !busy ? (
             <button type="button" className="answer-more" onClick={() => void copy()}>
               {copied ? "Copied" : "Copy as Markdown"}

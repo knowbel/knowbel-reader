@@ -37,7 +37,7 @@ export interface DeepDiveViewProps {
     text: string,
     comment: string,
     style?: Pick<DiveHighlight, "highlightColor" | "highlightStyle" | "divePanelId"> & DiveHighlightPlacement,
-  ) => void;
+  ) => string;
   onEditHighlight: (
     highlightId: string,
     edit: Partial<Pick<DiveHighlight, "highlightColor" | "highlightStyle" | "comment" | "divePanelId">>,

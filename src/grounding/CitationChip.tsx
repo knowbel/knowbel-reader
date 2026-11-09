@@ -63,6 +63,8 @@ export default function CitationChip({ kind, quoteMissing, label, refs, pageLabe
         href="#"
         className={`cite-chip cite-chip--${kind}${quoteMissing ? " cite-chip--warn" : ""}`}
         data-label={label}
+        data-source-labels={refs.map((ref) => ref.source.label).join(",")}
+        data-citation-kind={kind}
         aria-label={`Source: ${description}`}
         onClick={(event) => {
           event.preventDefault();

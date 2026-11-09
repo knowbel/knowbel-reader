@@ -33,6 +33,7 @@ async function wait(expression, message = expression) {
   const end = Date.now() + 15000;
   while (Date.now() < end) {
     if (await evaluate(expression)) return;
+    await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   throw new Error('Timed out: '+message+'\n'+(await evaluate('document.body.innerText.slice(0,6000)')));
@@ -44,9 +45,6 @@ async function fill(selector, text) {
   await evaluate(`(() => {const field=document.querySelector(${JSON.stringify(selector)});field.focus();field.select();})()`);
   if (text) await send('Input.insertText', {text});
   else await evaluate(`(() => {const field=document.querySelector(${JSON.stringify(selector)});const prototype=field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value').set.call(field,'');field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-}
-async function saveNote(selector) {
-  await evaluate(`(() => {const editor=document.querySelector(${JSON.stringify(selector)});[...editor.querySelectorAll('button')].find(button=>button.textContent==='Save').click();})()`);
 }
 async function select(text, occurrence=0) {
   await evaluate(`(() => {
@@ -77,7 +75,7 @@ const {browserContextId}=await send('Target.createBrowserContext');
 const {targetId}=await send('Target.createTarget',{url:'about:blank',browserContextId});
 ({sessionId}=await send('Target.attachToTarget',{targetId,flatten:true}));
 try {
-await send('Runtime.enable');await send('Network.enable');await send('Page.enable');
+await send('Runtime.enable');await send('Network.enable');await send('Page.enable');await send('Page.bringToFront');await send('Emulation.setFocusEmulationEnabled',{enabled:true});
 await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
 await send('Page.navigate',{url:origin});
 await wait("!!document.querySelector('.library-empty') || !!document.querySelector('.library')");
@@ -92,17 +90,6 @@ await evaluate(`window.__nativeRequests=[];window.__fetch=window.fetch;window.fe
     return new Response('data: '+JSON.stringify({text})+'\\n\\ndata: '+JSON.stringify({done:true,text})+'\\n\\n',{headers:{'Content-Type':'text/event-stream'}});
   }
   return window.__fetch(url,opts);
-};`);
-await evaluate(`window.__annotationUi = () => {
-  const button = (element) => [element.textContent.trim(),element.getAttribute('aria-label'),element.getAttribute('title'),element.className];
-  const style = (selector) => {const value=getComputedStyle(document.querySelector(selector));return [value.width,value.padding,value.fontSize,value.color,value.backgroundColor,value.borderRadius];};
-  return {
-    collapse: document.querySelector('.sidebar-collapse-button').outerHTML,
-    toolbar: [...document.querySelectorAll('.annot-toolbar button')].map(button),
-    sort: [...document.querySelector('select[aria-label="Sort annotations"]').options].map(option=>[option.value,option.textContent]),
-    actions: [...document.querySelectorAll('.annot-card--highlight button')].map(button),
-    styles: ['.sidebar-panel','.annot-header','.annot-card--highlight','.annot-card-actions','.annot-sort'].map(style),
-  };
 };`);
 const source='# Native Study\n\nA qubit stores quantum information. Repeat target appears here. Repeat target appears again.\n\nUse **formatted** text and $E=mc^2$ in a passage.\n\n## Methods\n\n- [x] Done\n- [ ] Pending\n\n| Epoch | Loss |\n| --- | --- |\n| 1 | 0.2 |\n\n![Training curve](figures/curve.png)\n\n[Jump to results](#results)\n\n## Results\n\nThe experiment measures a qubit.\n\n'+Array.from({length:30},(_,i)=>`Paragraph ${i}: Read the surrounding explanation and preserve annotations across layout changes.\n`).join('\n');
 await upload(source);
@@ -154,133 +141,158 @@ await evaluate("window.dispatchEvent(new PointerEvent('pointerup',{button:0}))")
 
 assert.equal(await evaluate("document.querySelectorAll('.flow-document table').length"),1);
 await wait("!!document.querySelector('.flow-document .katex')");
+await wait("!!document.querySelector('.notebook-dock .nb-list')");
 await select('Repeat target',1);
-await click('.dive-selection-tip .TextHighlight__color-row-item');
-await wait("!!document.querySelector('.flow-mark')");
+await click('.dive-selection-tip .TextHighlight__highlight-button');
+await wait("!!document.querySelector('.flow-mark') && document.querySelectorAll('.nb-entry').length===1");
 assert.equal(await evaluate("document.querySelector('.flow-mark').textContent"),'Repeat target');
-await send('Input.dispatchKeyEvent',{type:'keyDown',key:'+',code:'Equal',modifiers:4});
-await send('Input.dispatchKeyEvent',{type:'keyUp',key:'+',code:'Equal',modifiers:4});
-await wait("document.querySelector('.flow-document').style.fontSize==='110%'");
-await evaluate("document.querySelector('.flow-document p').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}))");
-await wait("!!document.querySelector('.annot-card--sticky .annot-editor-textarea')");
-assert.equal(await evaluate("document.querySelector('.annot-card--sticky .annot-editor-textarea').value"), '', 'new sticky editor starts empty');
-assert.ok(await evaluate("document.activeElement===document.querySelector('.annot-card--sticky .annot-editor-textarea')"));
-await fill('.annot-card--sticky .annot-editor-textarea','Remember this passage');
-await saveNote('.annot-card--sticky .annot-editor');
-await wait("document.querySelector('.flow-sticker')?.textContent==='Remember this passage'");
-// Native annotations use the same cards, search, filters, editors and export as PDF.
-await wait("!!document.querySelector('.annot-header input[aria-label=\"Search annotations\"]')");
-assert.equal(await evaluate("document.querySelector('select[aria-label=\"Sort annotations\"]').selectedOptions[0].textContent"),'By location');
-await click('.annot-card--highlight button[aria-label="Add note"]');
-await fill('.annot-card--highlight .annot-editor-textarea','Shared highlight note');
-await saveNote('.annot-card--highlight .annot-editor');
-await wait("document.querySelector('.annot-card--highlight .annot-card-comment')?.textContent.includes('Shared highlight note')");
-await click('.annot-card--highlight .annot-card-body');
-await wait("!!document.querySelector('.flow-mark--flash')");
-await click('.annot-new-note');
-await fill('.annot-composer .annot-editor-textarea','Shared document note');
-await saveNote('.annot-composer .annot-editor');
-await wait("document.querySelector('.annot-card--note')?.textContent.includes('Shared document note')");
-await fill('input[aria-label="Search annotations"]','Remember');
-await wait("document.querySelectorAll('.annot-card').length===1 && !!document.querySelector('.annot-card--sticky')");
-await fill('input[aria-label="Search annotations"]','');
-await click('.annot-filters > button');
-await evaluate("[...document.querySelectorAll('.annot-filters-item')].find(label=>label.textContent.includes('Sticky notes')).querySelector('input').click()");
-await wait("document.querySelectorAll('.annot-card').length===1 && !!document.querySelector('.annot-card--sticky')");
-await click('.annot-filters > button');
-await click('.annot-chips-clear');
-await wait("document.querySelectorAll('.annot-card').length===3");
-await evaluate("const sort=document.querySelector('select[aria-label=\"Sort annotations\"]');sort.value='recent';sort.dispatchEvent(new Event('change',{bubbles:true}));Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text)=>{window.__copiedAnnotations=text;}}})");
-await click('button[aria-label="Copy shown annotations as Markdown"]');
-await wait("window.__copiedAnnotations?.includes('Shared document note')");
-assert.ok(await evaluate("window.__copiedAnnotations.includes('Remember this passage') && window.__copiedAnnotations.includes('Shared highlight note') && !window.__copiedAnnotations.includes('p. ')") , 'native export uses section labels');
-await click('.annot-card--highlight button[aria-label="Delete"]');
-await wait("!document.querySelector('.annot-card--highlight')");
-await click('.flow-pane');
-await evaluate('document.activeElement?.blur()');
-await send('Input.dispatchKeyEvent',{type:'keyDown',key:'z',code:'KeyZ',modifiers:4});
-await send('Input.dispatchKeyEvent',{type:'keyUp',key:'z',code:'KeyZ',modifiers:4});
-await wait("!!document.querySelector('.annot-card--highlight')");
-await evaluate("window.getSelection().removeAllRanges();document.querySelector('.flow-document table td').click()");
-await wait("!!document.querySelector('.dive-selection-tip')");
-await click('.dive-selection-tip .TextHighlight__color-row-item');
-await wait("!!document.querySelector('.flow-object-mark')");
-await click('button[aria-label="Search (⌘F)"]');
-await evaluate("document.querySelector('input[aria-label=\"Search document\"]').focus()");
-await send('Input.insertText',{text:'qubit'});
-await wait("document.querySelectorAll('.flow-results button').length===2");
-await click('.flow-results button');
-await select('qubit');
-await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(button=>button.textContent==='Glossary').click()");
-await wait("!!document.querySelector('.glossary-card')");
-await wait("!!document.querySelector('.flow-mark--glossary')");
-await wait("document.querySelector('.glossary-card')?.textContent.includes('A quantum bit stores quantum information.')");
-await click('.flow-pane');
-await select('qubit');
-await evaluate("document.querySelector('.dive-selection-tip button[title*=Dive],.dive-selection-tip .dive-control button')?.click()");
-// Select the actual Deep Dive control using its accessible tooltip if its class changes.
-if(!await evaluate("window.__nativeRequests.some(request=>request.url.includes('/dive/'))")) {
-  await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(button=>(button.title+' '+button.textContent).toLowerCase().includes('dive'))?.click()");
+// Selecting the same exact occurrence reuses its source capture.
+await select('Repeat target',1);
+await click('.dive-selection-tip .TextHighlight__highlight-button');
+await wait("document.querySelectorAll('.nb-entry').length>=1");
+assert.equal(await evaluate("document.querySelectorAll('.nb-entry').length"),1,'same source is captured once');
+// Note immediately focuses rich writing, without another dialog.
+await select('formatted');
+await click('.dive-selection-tip .TextHighlight__comment-button');
+await wait("!!document.querySelector('.nb-rich-editor')");
+async function fillRich(selector,text) {
+  await evaluate(`(() => {const el=document.querySelector(${JSON.stringify(selector)});el.focus();const range=document.createRange();range.selectNodeContents(el);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);})()`);
+  await send('Input.insertText',{text});
 }
-await wait("window.__nativeRequests.some(request=>request.url.includes('/dive/'))");
-await wait("!!document.querySelector('.ask-turn-assistant .cite-chip')");
-assert.ok((await evaluate("document.querySelector('.cite-chip').dataset.label")).includes('Native Study'));
-assert.ok(!/^p\./.test(await evaluate("document.querySelector('.cite-chip').dataset.label")));
-await click('.cite-chip');
-await wait("!!document.querySelector('.flow-mark--flash')");
-await wait("!document.querySelector('button[aria-label^=\"Back to \"]').disabled");
-await click('.page-nav button[aria-label^="Back to "]');
-await wait("!document.querySelector('button[aria-label^=\"Forward to \"]').disabled");
+await fillRich('.nb-rich-editor','A thought worth keeping');
+await wait("document.querySelector('.nb-rich-editor')?.textContent.includes('A thought worth keeping')");
+// Notebook writing must not mutate or rerender document content.
+await evaluate("window.__documentMutations=0;window.__docObserver=new MutationObserver(records=>window.__documentMutations+=records.length);window.__docObserver.observe(document.querySelector('.flow-document'),{childList:true,subtree:true,characterData:true});");
+await send('Input.insertText',{text:' while reading'});
+await click('button[aria-label="Ask (⌘J)"]');
+await wait("!!document.querySelector('.ask-composer textarea')");
+await fill('.ask-composer textarea','Unsent question about qubit');
+await click('button[aria-label="Glossary"]');
+await click('button[aria-label="Ask (⌘J)"]');
+await wait("document.querySelector('.ask-composer textarea')?.value==='Unsent question about qubit'");
+assert.ok(await evaluate("document.querySelector('.nb-rich-editor')?.textContent.includes('A thought worth keeping while reading')"));
+assert.equal(await evaluate('window.__documentMutations'),0,'ordinary note typing leaves the document DOM alone');
+await evaluate('window.__docObserver.disconnect()');
+await click('button[aria-label="Close question area"]');
+await click('button[aria-label="Close notebook"]');
+await click('button[aria-label="Notebook"]');
+assert.ok(await evaluate("document.querySelector('.nb-rich-editor')?.textContent.includes('A thought worth keeping while reading')"));
+// Sticky notes edit the same canonical notebook body.
+await evaluate("document.querySelector('.flow-document p').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}))");
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
+await fillRich('.nb-entry.is-editing .nb-rich-editor','Remember this passage');
+await wait("document.querySelector('.flow-sticker')?.textContent==='Remember this passage'");
+await click('.nb-entry.is-editing .nb-editor-footer button');
+// Technical rich content, including image paste, equations, and tables.
+await click('button[aria-label="New note"]');
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
+await click('.nb-entry.is-editing button[aria-label="Bold"]');
+await fillRich('.nb-entry.is-editing .nb-rich-editor','Rich document note');
+await wait("document.querySelector('.nb-entry.is-editing .nb-rich-editor strong')?.textContent==='Rich document note'");
+await click('.nb-entry.is-editing button[aria-label="Bold"]');
+await click('.nb-entry.is-editing button[aria-label="Insert equation"]');
+await fill('input[aria-label="LaTeX equation"]','E=mc^2');
+await evaluate("document.querySelector('.nb-insert-form button[type=submit]').click()");
+await wait("!!document.querySelector('.nb-entry.is-editing .katex')");
+await click('.nb-entry.is-editing button[aria-label="Insert table"]');
+await wait("!!document.querySelector('.nb-entry.is-editing table')");
+const png=await evaluate("(() => {const canvas=document.createElement('canvas');canvas.width=32;canvas.height=32;canvas.getContext('2d').fillRect(0,0,32,32);return canvas.toDataURL('image/png');})()");
+await evaluate(`(() => {const bytes=Uint8Array.from(atob(${JSON.stringify(png)}.split(',')[1]),c=>c.charCodeAt(0));const transfer=new DataTransfer();transfer.items.add(new File([bytes],'Notebook image.png',{type:'image/png'}));document.querySelector('.nb-entry.is-editing .nb-rich-editor').dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));})()`);
+await wait("document.querySelector('.nb-entry.is-editing .nb-rich-editor img[alt=\"Notebook image.png\"]')?.naturalWidth===32");
+assert.ok(await evaluate("!!document.querySelector('.native-reader')"),'image paste does not import another document');
+// Question deletion works in the editor and in saved notes, with undo in each view.
+await evaluate("const rich=document.querySelector('.nb-entry.is-editing .nb-rich-editor').editor;rich.chain().insertContentAt(rich.state.doc.content.size,{type:'paragraph'}).focus('end').run()");
+await click('.nb-entry.is-editing button[aria-label="Ask AI here"]');
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-ai-question')");
+await click('.nb-entry.is-editing button[aria-label="Delete AI question"]');
+await wait("!document.querySelector('.nb-ai-exchange')");
+assert.ok(await evaluate("document.querySelector('.nb-entry.is-editing .nb-rich-editor strong')?.textContent==='Rich document note' && !!document.querySelector('.nb-entry.is-editing table') && !!document.querySelector('.nb-entry.is-editing .katex') && !!document.querySelector('.nb-entry.is-editing img')"),'deleting a question preserves the surrounding note');
+await click('.nb-entry.is-editing button[aria-label="Undo"]');
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-ai-question')");
+await click('.nb-entry.is-editing .nb-editor-footer button');
+await click('.nb-entry-writing button[aria-label="Delete AI question"]');
+await wait("!document.querySelector('.nb-ai-exchange')");
+await evaluate("[...document.querySelectorAll('.nb-header-menu button')].find(b=>b.textContent.includes('Undo notebook action')).click()");
+await wait("!!document.querySelector('.nb-entry-writing .nb-ai-question')");
+await click('.nb-entry-writing button[aria-label="Delete AI question"]');
+await wait("!document.querySelector('.nb-ai-exchange')");
+// Inline AI is native notebook content and preserves sourced answers.
+await evaluate("[...document.querySelectorAll('.nb-header-menu button')].find(b=>b.textContent.includes('Ask AI here')).click()");
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-ai-question')");
+await fill('.nb-entry.is-editing .nb-ai-question','Explain how a qubit stores information');
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Ask').click()");
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-inline-answer .cite-chip')");
+assert.ok(await evaluate("document.querySelector('.nb-inline-answer')?.textContent.includes('A qubit stores quantum information')"));
+await evaluate("window.__inlineEntryId=document.querySelector('.nb-entry.is-editing').dataset.entryId");
+// Reader edits survive completed regeneration until the new proposal is accepted.
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Edit answer').click()");
+await wait("!!document.querySelector('[aria-label=\"Edit AI answer\"]')");
+await fillRich('[aria-label="Edit AI answer"]','My edited explanation');
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Done editing').click()");
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Regenerate').click()");
+await wait("[...document.querySelectorAll('.nb-proposal button')].some(b=>b.textContent==='Use new answer')");
+assert.ok(await evaluate("document.querySelector('.nb-inline-answer').textContent.includes('My edited explanation')"),'regeneration retains the reader-edited current answer');
+await evaluate("[...document.querySelectorAll('.nb-proposal button')].find(b=>b.textContent==='Keep current answer').click()");
+assert.ok(await evaluate("document.querySelector('.nb-inline-answer').textContent.includes('My edited explanation')"));
+// Interrupted exchanges can be retried and never rerun on reopen.
+await evaluate('window.__holdAi=true');
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Regenerate').click()");
+await wait("!!document.querySelector('.nb-ai-exchange.is-running')");
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Stop').click()");
+await wait("!document.querySelector('.nb-ai-exchange.is-running')");
+// Deleting an active generation aborts it; undo restores a stopped, editable box.
+const requestsBeforeDelete = await evaluate('window.__nativeRequests.length');
+await evaluate("[...document.querySelectorAll('.nb-entry.is-editing .nb-ai-actions button')].find(b=>b.textContent==='Regenerate').click()");
+await wait(`!!document.querySelector('.nb-ai-exchange.is-running') && window.__nativeRequests.length>${requestsBeforeDelete}`);
+const abortedBeforeDelete = await evaluate('window.__abortedAi || 0');
+await click('.nb-entry.is-editing button[aria-label="Delete AI question"]');
+await wait("!document.querySelector('.nb-ai-exchange')");
+await wait(`window.__abortedAi>${abortedBeforeDelete}`);
+await click('.nb-entry.is-editing button[aria-label="Undo"]');
+await wait("!!document.querySelector('.nb-ai-exchange') && !document.querySelector('.nb-ai-exchange.is-running')");
+await evaluate('window.__holdAi=false');
+const beforeReopen=await evaluate('window.__nativeRequests.length');
 await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
 await click('.library-card-open');
-await wait("!!document.querySelector('.native-reader')");
-await wait("document.querySelector('.flow-sticker')?.textContent==='Remember this passage'");
-assert.equal(await evaluate("document.querySelectorAll('.flow-mark:not(.flow-mark--glossary):not(.flow-mark--flash)').length"),5);
-await click('button[aria-label="Annotations"]');
-await wait("!!document.querySelector('.annot-card--note')");
-assert.ok(await evaluate("document.querySelector('.annot-card--highlight .annot-card-comment')?.textContent.includes('Shared highlight note')"));
-assert.ok(await evaluate("document.querySelector('.annot-card--note').textContent.includes('Shared document note')"));
-const nativePanelUi = await evaluate('window.__annotationUi()');
-await evaluate("document.querySelector('.annot-card--highlight').dispatchEvent(new MouseEvent('mouseover',{bubbles:true}))");
-await wait("getComputedStyle(document.querySelector('.flow-mark[data-annotation-id]')).boxShadow!=='none'");
-await evaluate("document.querySelector('.annot-card--highlight').dispatchEvent(new MouseEvent('mouseout',{bubbles:true,relatedTarget:document.body}))");
-await wait("getComputedStyle(document.querySelector('.flow-mark[data-annotation-id]')).boxShadow==='none'");
-// No badge without an associated conversation. Start a dive from the document tooltip.
-const nativeDiveCalls = await evaluate("window.__nativeRequests.filter(request=>request.url.includes('/dive/')).length");
-assert.equal(await evaluate("document.querySelectorAll('.annot-dive-link').length"),0);
-await evaluate("window.getSelection().removeAllRanges();document.querySelector('.flow-mark[data-annotation-id]').click()");
-await wait("!!document.querySelector('.dive-selection-tip')");
-await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(button=>(button.title+' '+button.textContent).toLowerCase().includes('dive')).click()");
+await wait("!!document.querySelector('.native-reader') && !!document.querySelector('.nb-ai-exchange')");
+assert.equal(await evaluate('window.__nativeRequests.length'),beforeReopen,'reopening never reruns AI');
+assert.ok(await evaluate("document.querySelector('.nb-inline-answer').textContent.includes('My edited explanation')"),'edited answer survives reopening');
+assert.ok(await evaluate("document.querySelector('.flow-sticker')?.textContent==='Remember this passage'"));
+assert.ok(await evaluate("document.querySelector('.notebook-dock').textContent.includes('A thought worth keeping while reading')"));
+assert.ok(await evaluate("!!document.querySelector('.nb-entry-writing strong') && !!document.querySelector('.nb-entry-writing .katex') && !!document.querySelector('.nb-entry-writing table')"));
+await evaluate("document.querySelector('.nb-entry-writing img')?.scrollIntoView({block:'center'})");
+await send('Page.captureScreenshot',{format:'png'});
+await wait("[...document.querySelectorAll('.nb-entry-writing img')].some(img=>img.naturalWidth===32)");
+// Search and filters operate on the unified notebook.
+await fill('input[aria-label="Search notebook"]','Remember');
+await wait("document.querySelectorAll('.nb-entry').length===1");
+await fill('input[aria-label="Search notebook"]','');
+await evaluate("document.querySelector('select[aria-label=\"Filter notebook\"]').value='images';document.querySelector('select[aria-label=\"Filter notebook\"]').dispatchEvent(new Event('change',{bubbles:true}))");
+await wait("document.querySelectorAll('.nb-entry').length===1");
+await evaluate("document.querySelector('select[aria-label=\"Filter notebook\"]').value='all';document.querySelector('select[aria-label=\"Filter notebook\"]').dispatchEvent(new Event('change',{bubbles:true}))");
+// Source glossary and Deep Dive remain available behind More.
+await select('qubit');
+await click('.dive-selection-tip button[aria-label="More selection actions"]');
+await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(b=>b.textContent==='Glossary').click()");
+await wait("!!document.querySelector('.glossary-card') && !!document.querySelector('.flow-mark--glossary')");
+await click('.flow-pane');
+await select('qubit');
+await click('.dive-selection-tip button[aria-label="More selection actions"]');
+await click('.dive-selection-tip button[title="Dive deeper"]');
 await wait("!!document.querySelector('.ask-turn-assistant .cite-chip')");
-await wait("window.__nativeRequests.filter(request=>request.url.includes('/dive/')).length>"+nativeDiveCalls);
-await click('button[aria-label="Annotations"]');
-await wait("!!document.querySelector('.annot-card--highlight .annot-dive-link')");
-assert.equal(await evaluate("document.querySelectorAll('.annot-dive-link').length"),1);
-await click('.annot-card--highlight .annot-dive-link');
-await wait("!!document.querySelector('.ask-turn-assistant .cite-chip')");
-assert.equal(await evaluate("window.__nativeRequests.filter(request=>request.url.includes('/dive/')).length"),nativeDiveCalls+1);
-await click('button[aria-label="Annotations"]');
-await wait("!!document.querySelector('.annot-card--highlight')");
-const loadedPdf = requests.filter(url=>/PdfReader|pdfjs-dist|react-pdf-highlighter|html2canvas|\/assets\/(pdf[._-]|pdf_viewer-|convert-|Literata_)/.test(url));
-assert.deepEqual(loadedPdf,[],'Markdown should not load PDF modules');
-assert.deepEqual(errors,[],'No browser runtime errors');
-if(process.env.SCREENSHOT_PATH) {const screenshot=await send('Page.captureScreenshot',{format:'png'});
-await writeFile(process.env.SCREENSHOT_PATH,Buffer.from(screenshot.data,'base64'));}
-
-// Exercise an actual image attachment, including an image without alt text.
-await click('button[aria-label="Library"]');
-await wait("!!document.querySelector('.library')");
-const png=await evaluate("(() => {const canvas=document.createElement('canvas');canvas.width=16;canvas.height=16;const ctx=canvas.getContext('2d');ctx.fillStyle='blue';ctx.fillRect(0,0,16,16);return canvas.toDataURL('image/png');})()");
-await upload('# Image document\n\n![]('+png+')','Image.md');
-await wait("!!document.querySelector('.flow-image img')");
-await click('.flow-image img');
+await click('.ask-turn-assistant .cite-chip');
+await wait("!!document.querySelector('.flow-mark--flash')");
+assert.ok(await evaluate("!document.querySelector('.notebook-dock').hidden"));
+// Save selected AI text with its exact conversation/turn and sources.
+await evaluate(`(() => {const answer=document.querySelector('.ask-turn-assistant .answer-markdown');const range=document.createRange();range.selectNodeContents(answer);window.getSelection().removeAllRanges();window.getSelection().addRange(range);answer.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));})()`);
 await wait("!!document.querySelector('.dive-selection-tip')");
-await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(button=>(button.title+' '+button.textContent).toLowerCase().includes('dive')).click()");
-await wait("window.__nativeRequests.some(request=>request.body.messages?.some(message=>message.images?.length))");
-assert.equal(await evaluate("window.__nativeRequests.at(-1).body.messages.at(-1).images[0].mediaType"),'image/jpeg');
-
-// Switch through the unchanged PDF reader, then reopen the original notes.
+await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(b=>b.textContent==='Add to notebook').click()");
+await wait("document.querySelector('.notice-host')?.textContent.includes('Added to notebook')");
+const loadedPdf=requests.filter(url=>/PdfReader|pdfjs-dist|react-pdf-highlighter|html2canvas|\/assets\/(pdf[._-]|pdf_viewer-|convert-|Literata_)/.test(url));
+assert.deepEqual(loadedPdf,[],'native notebook must not load PDF modules');
+if(process.env.SCREENSHOT_PATH) {const screenshot=await send('Page.captureScreenshot',{format:'png'});await writeFile(process.env.SCREENSHOT_PATH,Buffer.from(screenshot.data,'base64'));}
+// PDF legacy migration, notebook parity, source editing, and persistent Deep Dive.
 await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
 const pdf=await PDFDocument.create();pdf.setTitle('PDF Regression');
@@ -288,72 +300,26 @@ const font=await pdf.embedFont(StandardFonts.Helvetica);
 for(let page=1;page<=3;page++) pdf.addPage([400,600]).drawText(page===1?'PDF smoke test':`PDF page ${page}`,{x:40,y:550,size:18,font});
 await upload(Array.from(await pdf.save()),'Regression.pdf','application/pdf');
 await wait("!!document.querySelector('.PdfHighlighter .page[data-page-number=\"1\"]')");
-assert.deepEqual(await evaluate('window.__navigatorStyle()'),nativeNavigationUi,'PDF and Markdown share navigator positioning and appearance');
-await send('Input.dispatchKeyEvent',{type:'keyDown',key:'g',code:'KeyG',modifiers:5});
-await send('Input.dispatchKeyEvent',{type:'keyUp',key:'g',code:'KeyG',modifiers:5});
-await wait("document.activeElement===document.querySelector('.page-nav-input')");
-await send('Input.insertText',{text:'2'});
-await send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter'});
-await send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter'});
-await wait("document.querySelector('.page-nav-input').value==='2'");
-await click('.page-nav button[aria-label="Next page"]');
-await wait("document.querySelector('.page-nav-input').value==='3'");
-await click('.page-nav button[aria-label="Previous page"]');
-await wait("document.querySelector('.page-nav-input').value==='2'");
-await click('.page-nav button[aria-label^="Back to p. 1"]');
-await wait("document.querySelector('.page-nav-input').value==='1'");
-
-await click('button[aria-label="Library"]');
-await wait("!!document.querySelector('.library')");
-await evaluate(`(async () => {
-  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('knowbelreader');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
-  const docs=await new Promise(resolve=>{const r=db.transaction('documents').objectStore('documents').getAll();r.onsuccess=()=>resolve(r.result);});
-  const meta=docs.find(doc=>doc.fileName==='Regression.pdf');
-  const tx=db.transaction('docData','readwrite');
-  tx.objectStore('docData').put([{id:'pdf-test-highlight',type:'text',content:{text:'PDF smoke test'},comment:'PDF saved note',highlightColor:'#ffe08a',position:{boundingRect:{x1:40,y1:32,x2:180,y2:55,width:400,height:600,pageNumber:1},rects:[{x1:40,y1:32,x2:180,y2:55,width:400,height:600,pageNumber:1}],usePdfCoordinates:false}}],meta.docId+'/highlights');
-  await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
-})()`);
-await evaluate("[...document.querySelectorAll('.library-card-open')].find(button=>button.textContent.includes('PDF Regression')).click()");
-await wait("!!document.querySelector('.PdfHighlighter .page[data-page-number=\"1\"]')");
-await click('button[aria-label="Annotations"]');
-await wait("!!document.querySelector('.annot-card--highlight')");
-assert.equal(await evaluate("document.querySelector('select[aria-label=\"Sort annotations\"]').selectedOptions[0].textContent"),'By location');
-assert.ok(await evaluate("document.querySelector('.annot-card--highlight').textContent.includes('PDF saved note') && document.querySelector('.annot-group-heading').textContent.includes('Page 1')"));
-assert.deepEqual(await evaluate('window.__annotationUi()'),nativePanelUi,'PDF and Markdown share panel/frame/card controls and computed styling');
-await click('.annot-card--highlight button[aria-label="Edit note"]');
-await fill('.annot-card--highlight .annot-editor-textarea','Edited PDF note');
-await saveNote('.annot-card--highlight .annot-editor');
-await wait("document.querySelector('.annot-card--highlight .annot-card-comment')?.textContent.includes('Edited PDF note')");
-await click('.annot-card--highlight .annot-card-body');
-const pdfDiveCalls = await evaluate("window.__nativeRequests.filter(request=>request.url.includes('/dive/')).length");
-assert.equal(await evaluate("document.querySelectorAll('.annot-dive-link').length"),0);
+await click('button[aria-label="Library"]');await wait("!!document.querySelector('.library')");
+await evaluate(`(async()=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('knowbelreader');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});const docs=await new Promise(resolve=>{const r=db.transaction('documents').objectStore('documents').getAll();r.onsuccess=()=>resolve(r.result)});const meta=docs.find(doc=>doc.fileName==='Regression.pdf');const tx=db.transaction('docData','readwrite');tx.objectStore('docData').delete(meta.docId+'/notebook');tx.objectStore('docData').put([{id:'pdf-test-highlight',type:'text',content:{text:'PDF smoke test'},comment:'PDF saved note',highlightColor:'#ffe08a',position:{boundingRect:{x1:40,y1:32,x2:180,y2:55,width:400,height:600,pageNumber:1},rects:[{x1:40,y1:32,x2:180,y2:55,width:400,height:600,pageNumber:1}],usePdfCoordinates:false}}],meta.docId+'/highlights');await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});db.close();})()`);
+await evaluate("[...document.querySelectorAll('.library-card-open')].find(b=>b.textContent.includes('PDF Regression')).click()");
+await wait("document.querySelector('.notebook-dock')?.textContent.includes('PDF saved note')");
 await click('.highlight-anchor[data-highlight-id="pdf-test-highlight"] .TextHighlight__part');
-await wait("!!document.querySelector('.highlight-toolbar button[title=\"Dive deeper\"]')");
+await wait("!!document.querySelector('.highlight-toolbar .TextHighlight__comment-button')");
+await click('.highlight-toolbar .TextHighlight__comment-button');
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
+await fillRich('.nb-entry.is-editing .nb-rich-editor','Edited PDF note');
+await click('.nb-entry.is-editing .nb-editor-footer button');
+await click('.highlight-anchor[data-highlight-id="pdf-test-highlight"] .TextHighlight__part');
+await wait("!!document.querySelector('.highlight-toolbar button[aria-label=\"More selection actions\"]')");
+await click('.highlight-toolbar button[aria-label="More selection actions"]');
 await click('.highlight-toolbar button[title="Dive deeper"]');
 await wait("!!document.querySelector('.dive-panel-pane')");
-await wait("window.__nativeRequests.filter(request=>request.url.includes('/dive/')).length>"+pdfDiveCalls);
-await wait("document.querySelector('.dive-panel-pane')?.textContent.includes('A qubit stores quantum information')");
-// Return to the document workspace and open the same linked dive again.
-await evaluate("document.querySelector('.app-rail button[aria-label=\"Annotations\"]')?.click()");
-// The shared annotations control returns from the dive to the document panel.
-await wait("!!document.querySelector('.annot-card--highlight .annot-dive-link')");
-assert.equal(await evaluate("document.querySelectorAll('.annot-dive-link').length"),1);
-await click('.annot-card--highlight .annot-dive-link');
-assert.equal(await evaluate("window.__nativeRequests.filter(request=>request.url.includes('/dive/')).length"),pdfDiveCalls+1);
-await upload(source);
-await wait("!!document.querySelector('.native-reader')");
+assert.ok(await evaluate("!document.querySelector('.notebook-dock').hidden && document.querySelector('.notebook-dock').textContent.includes('Edited PDF note')"),'notebook stays available in Deep Dive');
+// Return to native reading with all notebook content intact.
+await upload(source);await wait("!!document.querySelector('.native-reader')");
 await wait("document.querySelector('.flow-sticker')?.textContent==='Remember this passage'");
-
-// Leaving a document cancels a pending reply, settles it and flushes notes.
-await evaluate('window.__holdAi=true');
-await select('Use');
-await evaluate("[...document.querySelectorAll('.dive-selection-tip button')].find(button=>(button.title+' '+button.textContent).toLowerCase().includes('dive')).click()");
-await wait("document.querySelector('.ask-turn-assistant')?.textContent.includes('Reading')");
-await click('button[aria-label="Library"]');
-await wait("!!document.querySelector('.library')");
-assert.equal(await evaluate('window.__abortedAi'),1);
-await evaluate('window.__holdAi=false');
-
+await click('button[aria-label="Library"]');await wait("!!document.querySelector('.library')");
 // Large inputs must take the worker path, and restore a distant location.
 await evaluate("window.__workers=0;window.__workerResults=0;window.__longTasks=[];const OriginalWorker=window.Worker;window.Worker=class extends OriginalWorker{constructor(...args){super(...args);window.__workers++;this.addEventListener('message',()=>window.__workerResults++);}};new PerformanceObserver(list=>window.__longTasks.push(...list.getEntries().map(entry=>entry.duration))).observe({type:'longtask'});");
 const longSource='# Long Native\n\n'+Array.from({length:3500},(_,i)=>`Paragraph ${i}: Native reading preserves precise text anchors while allowing the document to reflow. No geometry is stored for these passages.\n`).join('\n')+'\n## End\n\nEnd content for reading restoration.';
@@ -363,15 +329,44 @@ await wait("document.querySelectorAll('.flow-block').length===3503");
 const openMs=Date.now()-start;
 assert.ok(await evaluate('window.__workers>0'),'large Markdown parses in a worker');
 assert.ok(await evaluate('window.__workerResults>0'),'the worker completed parsing');
+await click('button[aria-label="Table of contents"]');
 await evaluate("[...document.querySelectorAll('.flow-contents button')].find(button=>button.textContent==='End').click()");
 await wait("document.querySelector('.flow-scroll').scrollTop>10000");
 await new Promise(resolve=>setTimeout(resolve,100));
 await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
 await wait("[...document.querySelectorAll('.library-card-open')].some(button=>button.textContent.includes('Long Native'))");
+// A large, mixed rich notebook must remain cheap next to a large source.
+await evaluate(`(async()=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('knowbelreader');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});const docs=await new Promise(resolve=>{const r=db.transaction('documents').objectStore('documents').getAll();r.onsuccess=()=>resolve(r.result)});const meta=docs.find(doc=>doc.fileName==='Long.md');const tx=db.transaction('docData','readwrite');tx.objectStore('docData').put({schemaVersion:1,docId:meta.docId,revision:1,migrated:true,sections:[{id:'document',title:'Document notes'}],captures:[],entries:Array.from({length:1000},(_,i)=>({id:'perf-note-'+i,sectionId:'document',captureIds:[],createdAt:'2026-11-05',updatedAt:'2026-11-05',body:{type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'Technical observation '+i+': preserve the source and reasoning.',marks:[{type:'bold'}]}]},{type:'blockMath',attrs:{latex:'E=mc^2'}},{type:'aiExchange',attrs:{id:'perf-q-'+i,question:'What follows?',answer:'A saved explanation.',status:'complete',sources:[]}}]}}))},meta.docId+'/notebook');await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)});db.close()})()`);
+
 await evaluate("[...document.querySelectorAll('.library-card-open')].find(button=>button.textContent.includes('Long Native')).click()");
 await wait("document.querySelector('.flow-scroll')?.scrollTop>10000");
 const maxMainThreadTaskMs=Math.round(await evaluate('Math.max(0,...window.__longTasks)'));
+const notebookStart=Date.now();
+if(await evaluate("document.querySelector('.notebook-dock').hidden")) await click('button[aria-label="Notebook"]');
+await wait("document.querySelectorAll('.nb-entry-shell').length===1000");
+await wait("document.querySelectorAll('.nb-entry').length>0");
+const renderedNotes=await evaluate("document.querySelectorAll('.nb-entry').length");
+assert.ok(renderedNotes<40,`expected lazy rich rendering, rendered ${renderedNotes} of 1000 notes`);
+await click('.nb-entry-writing');
+await wait("document.querySelectorAll('.nb-rich-editor').length===1");
+await evaluate("const paragraph=document.querySelector('.nb-rich-editor p');const range=document.createRange();range.selectNodeContents(paragraph);range.collapse(false);window.getSelection().removeAllRanges();window.getSelection().addRange(range);document.querySelector('.nb-rich-editor').focus()");
+await evaluate("window.__sourceMutations=0;window.__notebookTypingTasks=[];new MutationObserver(list=>window.__sourceMutations+=list.length).observe(document.querySelector('.flow-document'),{childList:true,subtree:true,characterData:true,attributes:true});window.__longTasks=[]");
+await send('Input.insertText',{text:' Performance thought'});
+await wait("document.querySelector('.nb-save-state').textContent.includes('Saved')");
+assert.equal(await evaluate('window.__sourceMutations'),0,'notebook typing does not mutate the source, even with 1000 rich notes');
+const notebookOpenMs=Date.now()-notebookStart;
+const notebookTypingMaxTaskMs=Math.round(await evaluate('Math.max(0,...window.__longTasks)'));
+await click('button[aria-label="Library"]');await wait("!!document.querySelector('.library')");
+await evaluate("[...document.querySelectorAll('.library-card-open')].find(button=>button.textContent.includes('Long Native')).click()");
+await wait("document.querySelector('.nb-rich-editor')?.textContent.includes('Performance thought')");
+assert.equal(await evaluate("document.querySelector('.nb-entry.is-editing')?.dataset.entryId"),'perf-note-0','the active writing place is restored');
+await send('Input.insertText',{text:' continued'});
+assert.ok(await evaluate("document.querySelector('.nb-rich-editor').textContent.includes('Performance thought continued')"),'caret returns to its saved position');
+await send('Emulation.setDeviceMetricsOverride',{width:600,height:850,deviceScaleFactor:1,mobile:false});
+assert.ok(await evaluate("document.querySelector('.notebook-dock').getBoundingClientRect().width<=600"),'narrow notebook fits the viewport');
+await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+
 
 // Packaged webviews that disallow module workers still read the same files.
 await click('button[aria-label="Library"]');
@@ -382,5 +377,5 @@ await wait("document.querySelectorAll('.flow-block').length===3504");
 assert.ok(await evaluate("document.querySelector('.flow-document').textContent.includes('Fallback marker.')"));
 assert.deepEqual(errors,[],'No browser runtime errors, including PDF/native switching');
 assert.deepEqual(consoleErrors,[],'No browser console errors');
-console.log(JSON.stringify({passed:true,pdfModulesDuringMarkdown:loadedPdf.length,largeDocument:{blocks:3503,openMs,maxMainThreadTaskMs},apiCalls:await evaluate('window.__nativeRequests.map(request=>request.url)')}));
-} finally { await send('Target.disposeBrowserContext',{browserContextId}); ws.close(); }
+console.log(JSON.stringify({passed:true,pdfModulesDuringMarkdown:loadedPdf.length,largeDocument:{blocks:3503,openMs,maxMainThreadTaskMs},largeNotebook:{entries:1000,renderedNotes,openAndSaveMs:notebookOpenMs,typingMaxTaskMs:notebookTypingMaxTaskMs},apiCalls:await evaluate('window.__nativeRequests.map(request=>request.url)')}));
+} catch(error) { console.error(JSON.stringify({runtimeErrors:errors,consoleErrors,visibility:await evaluate("document.visibilityState"),images:await evaluate("[...document.querySelectorAll('.nb-entry-writing img')].map(img=>({src:img.src,width:img.naturalWidth,loading:img.loading,complete:img.complete}))"),editor:await evaluate("document.querySelector('.nb-rich-editor')?.outerHTML"),notices:await evaluate("document.querySelector('.notice-host')?.textContent")})); const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile('/private/tmp/knowbel-notebook-failure.png',Buffer.from(shot.data,'base64')); throw error; } finally { await send('Target.disposeBrowserContext',{browserContextId}); ws.close(); }

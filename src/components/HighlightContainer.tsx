@@ -9,7 +9,7 @@ import {
   usePdfHighlighterContext,
   type ScaledPosition,
 } from "react-pdf-highlighter-plus";
-import { useNoteControl } from "./NoteControl";
+
 import HighlightToolbar from "./HighlightToolbar";
 import { HIGHLIGHT_COLOR_PRESETS } from "../highlightColors";
 import type { CommentedHighlight } from "../types";
@@ -26,6 +26,7 @@ import {
 } from "../stickerStyles";
 
 interface HighlightContainerProps {
+  onOpenNote: (id: string) => void;
   editHighlight: (
     idToUpdate: string,
     edit: Partial<CommentedHighlight>,
@@ -68,6 +69,7 @@ function GlossaryFlash() {
 }
 
 function AnnotationHighlight({
+  onOpenNote,
   editHighlight,
   deleteHighlight,
   notesCollapsed,
@@ -94,11 +96,7 @@ function AnnotationHighlight({
   const [manuallyCollapsed, setManuallyCollapsed] = useState(false);
   const compact = notesCollapsed || manuallyCollapsed;
 
-  const commentControls = useNoteControl({
-    comment: highlight.comment,
-    onCommit: (comment) => editHighlight(highlight.id, { comment }),
-    classPrefix: highlight.type === "text" ? "TextHighlight" : "AreaHighlight",
-  });
+  const commentControls = { panel: null, button: <button type="button" className="TextHighlight__comment-button" title="Open linked note" onClick={() => onOpenNote(highlight.id)}>Note</button> };
 
   const isText = highlight.type === "text";
 
@@ -244,7 +242,7 @@ function AnnotationHighlight({
               },
             });
           }}
-          onEditStart={() => toggleEditInProgress(true)}
+          onEditStart={() => { toggleEditInProgress(false); onOpenNote(highlight.id); }}
           onEditEnd={() => toggleEditInProgress(false)}
           onDelete={() => deleteHighlight(highlight.id)}
           compact={compact}

@@ -4,6 +4,7 @@ import type { SourceRef } from "../grounding/types";
 import type { FlowAnchor } from "../document/model";
 
 export interface AskTurn {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   at: string; // ISO timestamp

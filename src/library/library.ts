@@ -1,5 +1,7 @@
+import type { NotebookAsset, NotebookLegacy } from "../notebook/model.ts";
 import { mergeById, READER_DATA_KINDS } from "../storage/documents.ts";
 import type { DocDataKind, DocumentMeta, LibraryStorage } from "../storage/types.ts";
+import { isNotebook, mergeNotebookAssets, mergeNotebooks, migrateNotebook } from "../notebook/model.ts";
 
 // The library's own logic, apart from its UI (LibraryHome): naming,
 // ordering, and moving the reader's notes in and out as one backup file.
@@ -66,7 +68,7 @@ const LEGACY_NOTES_FORMAT = "knowayreader-notes";
 
 export interface NotesBackup {
   format: typeof NOTES_FORMAT;
-  version: 1;
+  version: 1 | 2;
   exportedAt: string;
   documents: { meta: DocumentMeta; data: Partial<Record<DocDataKind, unknown>> }[];
 }
@@ -82,7 +84,7 @@ export async function exportNotes(storage: LibraryStorage): Promise<NotesBackup>
     }
     documents.push({ meta, data });
   }
-  return { format: NOTES_FORMAT, version: 1, exportedAt: new Date().toISOString(), documents };
+  return { format: NOTES_FORMAT, version: documents.some((document) => document.data.notebook) ? 2 : 1, exportedAt: new Date().toISOString(), documents };
 }
 
 export interface ImportSummary {
@@ -109,11 +111,38 @@ export async function importNotes(storage: LibraryStorage, backup: unknown): Pro
     } else if (existing.fileMissing) {
       missingFiles += 1;
     }
+    if (data?.notebook) {
+      if (!isNotebook(data.notebook) || data.notebook.docId !== meta.docId) throw new Error("This backup contains an unsupported notebook. Existing notes were kept.");
+      const current = await storage.getData<unknown>(meta.docId, "notebook");
+      const currentAssets = await storage.getData<NotebookAsset[]>(meta.docId, "notebookAssets") ?? [];
+      let notebook = isNotebook(current) ? current : null;
+      let assets = currentAssets;
+      if (!notebook) {
+        const legacy: NotebookLegacy = {};
+        for (const kind of ["highlights", "nativeAnnotations", "diveHighlights", "generalNotes", "pins", "dives"] as const) legacy[kind] = await storage.getData(meta.docId, kind);
+        const migrated = migrateNotebook(meta.docId, legacy); notebook = migrated.notebook; assets = [...assets, ...migrated.assets];
+      }
+      const merged = mergeNotebookAssets(assets, Array.isArray(data.notebookAssets) ? data.notebookAssets : [], data.notebook);
+      await storage.putData(meta.docId, "notebookAssets", merged.assets);
+      await storage.putData(meta.docId, "notebook", mergeNotebooks(notebook, merged.document));
+    }
     for (const kind of NOTE_KINDS) {
       const incoming = data?.[kind];
       if (incoming === undefined || incoming === null) continue;
       const stored = await storage.getData<unknown>(meta.docId, kind);
+      if (kind === "notebook" || (kind === "notebookAssets" && data?.notebook)) continue;
       await storage.putData(meta.docId, kind, stored === null ? incoming : mergeById(stored, incoming));
+    }
+    // An older backup can be imported into an already migrated library too.
+    if (!data?.notebook) {
+      const notebook = await storage.getData<unknown>(meta.docId, "notebook");
+      if (isNotebook(notebook)) {
+        const migrated = migrateNotebook(meta.docId, data ?? {});
+        const assets = await storage.getData<unknown>(meta.docId, "notebookAssets");
+        const merged = mergeNotebookAssets(Array.isArray(assets) ? assets : [], migrated.assets, migrated.notebook);
+        await storage.putData(meta.docId, "notebookAssets", merged.assets);
+        await storage.putData(meta.docId, "notebook", mergeNotebooks(notebook, merged.document));
+      }
     }
   }
   return { documents: parsed.documents.length, missingFiles };

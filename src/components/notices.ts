@@ -6,6 +6,7 @@
 export interface Notice {
   id: number;
   text: string;
+  actions?: { label: string; run: () => void }[];
 }
 
 const SHOWN_MS = 8000;
@@ -19,8 +20,8 @@ function emit() {
   for (const listener of listeners) listener(notices);
 }
 
-export function showNotice(text: string): void {
-  const notice = { id: nextId++, text };
+export function showNotice(text: string, actions?: Notice["actions"]): void {
+  const notice = { id: nextId++, text, actions };
   notices = [...notices, notice].slice(-MAX_SHOWN);
   emit();
   window.setTimeout(() => dismissNotice(notice.id), SHOWN_MS);

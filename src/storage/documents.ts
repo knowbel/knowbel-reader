@@ -79,6 +79,9 @@ export async function migrateLegacy(
 
 // What the reader loads when a document opens.
 export const READER_DATA_KINDS = [
+  "notebook",
+  "notebookAssets",
+  "readerDrafts",
   "highlights",
   "dives",
   "pins",

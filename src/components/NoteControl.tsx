@@ -68,13 +68,13 @@ export function useNoteControl({ comment, onCommit, classPrefix, containerRef }:
           close();
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
             event.preventDefault();
             commit();
             close();
           } else if (event.key === "Escape") {
             event.preventDefault();
-            setDraft(comment || "");
+            commit();
             close();
           }
         }}

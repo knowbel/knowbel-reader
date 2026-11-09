@@ -1,3 +1,4 @@
+import { revealConversationTurn } from "../notebook/revealTurn";
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getStorage } from "../storage";
@@ -15,7 +16,8 @@ import AppRail, { type HighlightPen, type Tool } from "../components/AppRail";
 import type { SidebarPanel } from "../components/Sidebar";
 import FloatingTip from "../components/FloatingTip";
 import HighlightToolbar from "../components/HighlightToolbar";
-import { useNoteControl } from "../components/NoteControl";
+import { flowSnapshot } from "../notebook/nativeCapture";
+import { saveNotebookExcerpt } from "../notebook/capture";
 import { showNotice } from "../components/notices";
 import { useTheme } from "../theme";
 import { HIGHLIGHT_COLOR_PRESETS } from "../highlightColors";
@@ -28,24 +30,28 @@ import type { GlossaryFocusRequest } from "../components/GlossaryPanel";
 import { AskStore } from "../ask/store";
 import { ask, newThread, type AskContext } from "../ask/job";
 import type { AskThread } from "../ask/types";
-import type { GeneralNote, Pin } from "../deepdive/types";
 import type { ResolvedRef } from "../grounding/CitationChip";
 import type { SourceRef } from "../grounding/types";
 import { addAttachment, ATTACHMENT_MAX_CHARS, makeAttachment, type Attachment } from "../grounding/attachments";
 import { importFiles } from "../library/importFiles";
 import "./reader.css";
+import { useDraftAttachments } from "../notebook/drafts";
+import { NotebookStore, useNativeMarks } from "../notebook/store";
+import { useReaderPersistence } from "../notebook/useReaderPersistence";
+import { NotebookProvider } from "../notebook/context";
+import { captureEntryId } from "../notebook/model";
+const NotebookDock = lazy(() => import("../notebook/NotebookDock"));
 
-const NativeAnnotationsPanel = lazy(() => import("./NativeAnnotationsPanel"));
+
 const AskPanel = lazy(() => import("../ask/AskPanel"));
 const GlossaryPanel = lazy(() => import("../components/GlossaryPanel"));
 const GlossaryCard = lazy(() => import("../glossary/GlossaryCard"));
 
 interface Session {
+  notebook: NotebookStore;
   meta: DocumentMeta;
   engine: DocumentEngine;
   annotations: DocumentAnnotation[];
-  pins: Pin[];
-  notes: GeneralNote[];
   writer: DocDataWriter;
   glossary: GlossaryStore;
   ask: AskStore;
@@ -74,13 +80,11 @@ export default function NativeReader({ initialDocument, onHome, onOpenDocument }
       const ask = new AskStore();
       glossary.load(stored<GlossaryEntry>("glossary"), (entries) => writer.schedule(model.id, "glossary", entries));
       ask.load(stored<AskThread>("threads"), (threads) => writer.schedule(model.id, "threads", threads));
-      const annotations = stored<DocumentAnnotation>("nativeAnnotations");
-      const pins = stored<Pin>("pins");
-      const notes = stored<GeneralNote>("generalNotes");
+      const notebook = new NotebookStore(storage);
+      await notebook.load(model.id, opened.data);
+      const annotations = notebook.getNativeAnnotations();
       writer.prime(model.id, "nativeAnnotations", annotations);
-      writer.prime(model.id, "pins", pins);
-      writer.prime(model.id, "generalNotes", notes);
-      setSession({ meta: opened.meta, engine: new DocumentEngine(model), annotations, pins, notes, writer, glossary, ask, saves });
+      setSession({ notebook, meta: opened.meta, engine: new DocumentEngine(model), annotations, writer, glossary, ask, saves });
     })().catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Couldn't open this document."); });
     return () => { cancelled = true; };
   }, [initialDocument]);
@@ -98,12 +102,14 @@ function useEvent<T extends (...args: never[]) => unknown>(callback: T): T {
 }
 
 function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session; onHome: () => void; onOpenDocument: (meta: DocumentMeta) => void }) {
-  const { engine, writer, glossary, ask: askStore } = session;
+  const { engine, writer, glossary, ask: askStore, notebook } = session;
   const model = engine.document;
-  const [annotations, setAnnotations] = useState(session.annotations);
-  const [pins, setPins] = useState(session.pins);
-  const [notes, setNotes] = useState(session.notes);
-  const [panel, setPanel] = useState<SidebarPanel | null>(session.meta.view ? session.meta.view.panel as SidebarPanel | null : "toc");
+  const annotations = useNativeMarks(notebook);
+  const setAnnotations = notebook.setNativeAnnotations;
+  const [notebookOpen, setNotebookOpen] = useState(session.meta.view?.notebookOpen ?? true);
+  notebook.onReveal = () => setNotebookOpen(true);
+
+  const [panel, setPanel] = useState<SidebarPanel | null>(session.meta.view?.panel === "annotations" ? null : session.meta.view ? session.meta.view.panel as SidebarPanel | null : null);
   const [tool, setTool] = useState<Tool>("select");
   const [pen, setPen] = useState<HighlightPen>(() => {
     try { const saved = JSON.parse(localStorage.getItem("highlight-pen") ?? "null");
@@ -111,10 +117,11 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     } catch { /* use default */ }
     return { color: HIGHLIGHT_COLOR_PRESETS[0], style: "highlight" };
   });
+  useEffect(() => { const update = (event: Event) => setPen((event as CustomEvent<HighlightPen>).detail); window.addEventListener("knowbel-pen-change", update); return () => window.removeEventListener("knowbel-pen-change", update); }, []);
   const [scale, setScale] = useState(session.meta.textScale ?? 100);
   const [notesCollapsed, setNotesCollapsed] = useState(false);
   const [hoveredAnnotationId, setHoveredAnnotationId] = useState<string | null>(null);
-  const [pendingStickerId, setPendingStickerId] = useState<string | null>(null);
+
   const [selection, setSelection] = useState<FlowSelection | null>(null);
   const [tipGlossaryId, setTipGlossaryId] = useState<string | null>(null);
   const [glossaryFocus, setGlossaryFocus] = useState<GlossaryFocusRequest | null>(null);
@@ -125,7 +132,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   const searchRef = useRef<HTMLInputElement>(null);
   const [askFocus, setAskFocus] = useState(0);
   const [openThreadId, setOpenThreadId] = useState<string | null>(session.meta.view?.threadId ?? null);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachments, setAttachments] = useDraftAttachments(notebook.drafts, `ask:${openThreadId ?? "new-question"}`);
   const [currentUnit, setCurrentUnit] = useState(1);
   const [navigationFocusRequest, setNavigationFocusRequest] = useState(0);
   const [navigate, setNavigate] = useState<{ anchor: FlowAnchor; sequence: number } | null>(() => {
@@ -140,7 +147,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   const metaWrites = useRef(Promise.resolve());
   const controller = useRef(new AbortController());
   const jobs = useRef(new Set<Promise<void>>());
-  const undo = useRef<DocumentAnnotation[][]>([]);
+
   const history = useRef<{ back: FlowAnchor[]; forward: FlowAnchor[] }>({ back: [], forward: [] });
   const [, updateHistory] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -169,6 +176,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     saveTimer.current = setTimeout(() => void saveMeta().catch(() => showNotice("Couldn't save your reading position.")), 700);
   });
   const closeJobs = useEvent(() => {
+    notebook.cancelJobs();
     controller.current.abort();
     for (const entry of glossary.getSnapshot()) cancelGlossaryJob(entry.id);
   });
@@ -177,12 +185,12 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     // A failed debounced save is retried with the current in-memory value.
     // If it still fails, the reader stays open with those notes intact.
     session.saves.error = null;
-    writer.schedule(model.id, "nativeAnnotations", annotations);
-    writer.schedule(model.id, "pins", pins);
-    writer.schedule(model.id, "generalNotes", notes);
+
+
+
     writer.schedule(model.id, "glossary", glossary.getSnapshot());
     writer.schedule(model.id, "threads", askStore.getSnapshot());
-    await Promise.all([writer.flush(), saveMeta()]);
+    await Promise.all([writer.flush(), notebook.flush(), saveMeta()]);
     if (session.saves.error) throw session.saves.error;
   });
   const leave = useEvent(async () => {
@@ -190,33 +198,27 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     await flush();
     onHome();
   });
+  useReaderPersistence({ checkpoint: notebook.checkpoint, cancel: closeJobs, flush });
   useEffect(() => {
     if (controller.current.signal.aborted) controller.current = new AbortController();
-    const pageHide = () => { closeJobs(); void flush().catch(() => {}); };
-    window.addEventListener("pagehide", pageHide);
     return () => {
-      window.removeEventListener("pagehide", pageHide);
       closeJobs();
       clearTimeout(flashTimer.current);
       clearTimeout(saveTimer.current);
-      void writer.flush();
+      void Promise.all([writer.flush(), notebook.flush()]).catch(() => {});
       releaseDocument(model.id);
     };
-  }, [closeJobs, flush, writer, model.id]);
+  }, [closeJobs, flush, writer, model.id, notebook]);
   useEffect(() => {
-    metaRef.current = { ...metaRef.current, textScale: scale, view: { zoom: "auto", twoPage: false, continuous: true, ...metaRef.current.view, panel, threadId: openThreadId } };
+    metaRef.current = { ...metaRef.current, textScale: scale, view: { zoom: "auto", twoPage: false, continuous: true, ...metaRef.current.view, panel, threadId: openThreadId, notebookOpen } };
     scheduleMeta();
-  }, [scale, panel, openThreadId, scheduleMeta]);
+  }, [scale, panel, openThreadId, notebookOpen, scheduleMeta]);
   useEffect(() => { if (panel === "search") searchRef.current?.focus(); }, [panel]);
 
   const changeAnnotations = useEvent((next: DocumentAnnotation[]) => {
-    undo.current.push(annotations);
-    if (undo.current.length > 50) undo.current.shift();
     setAnnotations(next);
-    writer.schedule(model.id, "nativeAnnotations", next);
+
   });
-  const changePins = useEvent((next: Pin[]) => { setPins(next); writer.schedule(model.id, "pins", next); });
-  const changeNotes = useEvent((next: GeneralNote[]) => { setNotes(next); writer.schedule(model.id, "generalNotes", next); });
   const closeTip = useCallback(() => { setSelection(null); setTipGlossaryId(null); }, []);
   const placeHere = () => {
     const point = metaRef.current.readingPosition;
@@ -256,9 +258,26 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     scheduleMeta();
   });
   const saveAnnotation = useEvent((anchor: FlowAnchor, kind: DocumentAnnotation["kind"], comment = "", color = pen.color, style = pen.style) => {
+    const existing = notebook.getSnapshot().captures.find((capture) => capture.native?.kind === kind && sameAnchor(capture.native.anchor, anchor));
+    if (existing?.native) {
+      const current = notebook.getNativeAnnotations().find((item) => item.id === existing.native!.id);
+      if (current) return current;
+      const restored = { ...existing.native, comment: notebook.plain(notebook.entryForCapture(existing.id)) };
+      changeAnnotations([restored, ...annotations]); return restored;
+    }
     const annotation: DocumentAnnotation = { id: crypto.randomUUID(), kind, anchor, text: anchorText(model, anchor), comment, color, style,
       paper: kind === "sticker" ? STICKER_DEFAULT_PAPER : undefined, createdAt: new Date().toISOString() };
     changeAnnotations([annotation, ...annotations]);
+    if (anchor.kind === "object") {
+      const object = model.objects.find((object) => object.id === anchor.objectId && object.blockId === anchor.blockId);
+      if (object?.kind === "table") {
+        const block = model.blocks[engine.blockIndex.get(anchor.blockId)!];
+        if (block) notebook.enrichCaptures((capture) => capture.id === `native:${annotation.id}` ? { ...capture, snapshotRich: flowSnapshot(block.content) } : capture);
+      } else if (object?.kind === "image") {
+        const signal = controller.current.signal;
+        trackJob((async () => { const attachments = await selectedAttachments(anchor); if (signal.aborted) return; const image = attachments.find((attachment) => attachment.image)?.image; if (!image) return; const imageId = notebook.addImageDataUrl(`data:${image.mediaType};base64,${image.data}`); notebook.enrichCaptures((capture) => capture.id === `native:${annotation.id}` ? { ...capture, imageId } : capture); })().catch(() => {}));
+      }
+    }
     return annotation;
   });
   const captureSelection = useEvent((next: FlowSelection) => {
@@ -271,7 +290,8 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   });
   const placeSticker = useEvent((anchor: FlowAnchor) => {
     const annotation = saveAnnotation(anchor, "sticker");
-    setPendingStickerId(annotation.id);
+
+    notebook.reveal(captureEntryId(`native:${annotation.id}`));
     setTool("select");
     setPanel("annotations");
     closeTip();
@@ -340,6 +360,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       if (!attached.length) return;
       const thread = { ...newThread(quote.slice(0, 80) || "Deep Dive"), mode: "dive" as const, anchor };
       askStore.add(thread);
+      notebook.enrichCaptures((capture) => capture.native && sameAnchor(capture.native.anchor, anchor) ? { ...capture, conversationId: thread.id } : capture);
       setOpenThreadId(thread.id); setPanel("ask"); setAskFocus((n) => n + 1);
       await ask(askStore, thread.id, "Explain the selected passage or image and how it connects to the surrounding document.", getAskContext(), { attachments: attached });
     })().catch((error) => { if (!controller.current.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't start this dive."); }));
@@ -377,8 +398,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
         else if (k === "j") { setPanel("ask"); setAskFocus((n) => n + 1); }
         else fileRef.current?.click();
       } else if (mod && !editing && k === "z" && !event.shiftKey) {
-        event.preventDefault(); const previous = undo.current.pop();
-        if (previous) { setAnnotations(previous); writer.schedule(model.id, "nativeAnnotations", previous); closeTip(); }
+        event.preventDefault(); notebook.undo(); closeTip();
       } else if (mod && !editing && ["=", "+", "-", "0"].includes(k)) {
         event.preventDefault(); setScale((scale) => k === "0" ? 100 : Math.max(70, Math.min(200, scale + (k === "-" ? -10 : 10))));
       } else if (mod && !editing && (k === "arrowleft" || k === "arrowright")) {
@@ -387,28 +407,31 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [closeTip, model.id, openFile, writer, goHistory]);
+  }, [closeTip, model.id, openFile, writer, goHistory, notebook]);
 
-  const openAnnotationDive = useEvent((threadId: string) => {
-    const thread = askStore.get(threadId);
-    if (!thread || thread.mode !== "dive") return;
-    if (thread.anchor) goTo(thread.anchor);
-    setOpenThreadId(thread.id); setPanel("ask"); setAskFocus((n) => n + 1);
-  });
-  const deleteAnnotation = useEvent((id: string) => changeAnnotations(annotations.filter((item) => item.id !== id)));
-  const editAnnotation = useEvent((id: string, comment: string) => changeAnnotations(annotations.map((item) => item.id === id ? { ...item, comment } : item)));
-  const deletePin = useEvent((id: string) => changePins(pins.filter((item) => item.id !== id)));
-  const editPin = useEvent((id: string, comment: string) => changePins(pins.map((item) => item.id === id ? { ...item, comment } : item)));
-  const addNote = useEvent((text: string) => changeNotes([{ id: crypto.randomUUID(), text, createdAt: new Date().toISOString() }, ...notes]));
-  const editNote = useEvent((id: string, text: string) => changeNotes(notes.map((item) => item.id === id ? { ...item, text } : item)));
-  const deleteNote = useEvent((id: string) => changeNotes(notes.filter((item) => item.id !== id)));
-  const handledStickerEdit = useCallback(() => setPendingStickerId(null), []);
-
+  const notebookSections = useMemo(() => model.outline.map((heading, i) => ({ id: `source:${heading.blockId}:${i}`, title: heading.title, position: (engine.blockIndex.get(heading.blockId) ?? 0) + 1 })), [engine, model]);
+  useEffect(() => { notebook.enrichCaptures((capture) => {
+    if (!capture.native) return capture;
+    const position = engine.unitForAnchor(capture.native.anchor), locationLabel = anchorLabel(model, capture.native.anchor);
+    const conversationId = askStore.getSnapshot().find((thread) => thread.mode === "dive" && !thread.parentThreadId && thread.anchor && sameAnchor(thread.anchor, capture.native!.anchor))?.id;
+    return capture.position === position && capture.locationLabel === locationLabel && capture.conversationId === conversationId ? capture : { ...capture, position, locationLabel, conversationId };
+  }); }, [notebook, engine, model, annotations, askStore]);
+  const askPanel = (<AskPanel reflowable store={askStore} getContext={getAskContext} hasDocument pageLabels={null} openThreadId={openThreadId} onOpenThread={setOpenThreadId}
+          onJob={trackJob} onReturnToPassage={(thread) => { if (thread.anchor) goTo(thread.anchor); }}
+          onDiveFromAnswer={diveFromAnswer}
+          onJumpToSource={jumpSource} focusRequest={askFocus} attachments={attachments} onAddToQuestion={(kind, text) => { const attachment = makeAttachment(kind, text); if (attachment) setAttachments((previous) => addAttachment(previous, attachment)); }}
+          onRemoveAttachment={(id) => setAttachments((previous) => previous.filter((attachment) => attachment.id !== id))} onClearAttachments={() => setAttachments([])}
+          onPin={(text, context) => void saveNotebookExcerpt(notebook, text, { context })} />);
   const selectedAnnotation = selection?.annotationId ? annotations.find((entry) => entry.id === selection.annotationId) : undefined;
-  return <div className="app-shell native-reader" onDragOver={(event) => { if ([...event.dataTransfer.types].includes("Files")) event.preventDefault(); }}
-    onDrop={(event) => { if (event.dataTransfer.files.length) { event.preventDefault(); void openFile(event.dataTransfer.files[0]); } }}>
+  return <NotebookProvider value={{ store: notebook, getAskContext, pageLabel: (unit) => engine.labelForUnit(unit), onJumpToSource: jumpSource, onOpenCapture: (capture) => {
+    if (capture.native) goTo(capture.native.anchor);
+    else if (capture.sources?.[0]) jumpSource({ source: capture.sources[0], range: [capture.sources[0].start, capture.sources[0].end] });
+    else showNotice("The original source location wasn’t recorded. Your saved excerpt is kept here.");
+  }, onHoverCapture: (capture) => setHoveredAnnotationId(capture?.native?.id ?? null), onOpenConversation: (id, turnId) => { if (id.startsWith("glossary:")) { setPanel("glossary"); setGlossaryFocus({ entryId: id.slice(9), nonce: Date.now() }); return true; } if (!askStore.get(id)) return false; setOpenThreadId(id); setPanel("ask"); setNotebookOpen(true); revealConversationTurn(turnId); return true; }, attachmentsForCapture: (capture) => capture.native ? attachmentFor(capture.native.anchor) : (capture.sources ?? []).map((source) => ({ id: crypto.randomUUID(), kind: "document", text: source.text, pageNumber: source.pageNumber, range: [source.start, source.end], location: source.location, locationLabel: source.locationLabel })) }}>
+  <div className="app-shell native-reader" onDragOver={(event) => { if ([...event.dataTransfer.types].includes("Files")) event.preventDefault(); }}
+    onDrop={(event) => { if ((event.target as HTMLElement).closest(".notebook-dock")) return; if (event.dataTransfer.files.length) { event.preventDefault(); void openFile(event.dataTransfer.files[0]); } }}>
     <AppRail reflowable onHome={() => void leave().catch(() => showNotice("Couldn't save your reading position. Try again."))}
-      activePanel={panel} onSelectPanel={(next) => setPanel((previous) => previous === next ? null : next)} tool={tool}
+      activePanel={panel} notebookOpen={notebookOpen} onSelectPanel={(next) => { if (next === "annotations") setNotebookOpen((value) => !value); else { if (next === "ask") setNotebookOpen(true); setPanel((previous) => previous === next ? null : next); } }} tool={tool}
       onSelectTool={(next) => setTool((previous) => previous === next && next === "note" ? "select" : next)} pen={pen}
       onPenChange={(next) => { setPen(next); try { localStorage.setItem("highlight-pen", JSON.stringify(next)); } catch { /* session preference */ } }}
       view={{ reflowable: true, zoomLabel: `${scale}%`, currentZoomPercent: () => scale, minZoomPercent: 70, maxZoomPercent: 200,
@@ -417,15 +440,9 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
         twoPageView: false, continuousScroll: true, onToggleTwoPageView: () => {}, onToggleContinuousScroll: () => {},
         notesCollapsed, onToggleNotesCollapsed: () => setNotesCollapsed((value) => !value), theme, onToggleTheme: toggleTheme }} />
     <input ref={fileRef} type="file" accept={DOCUMENT_FILE_ACCEPT} hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void openFile(file); event.target.value = ""; }} />
-    {panel ? <SidebarFrame onClose={() => setPanel(null)}>
+    {panel && panel !== "ask" && panel !== "annotations" ? <SidebarFrame onClose={() => setPanel(null)}>
       <Suspense fallback={<p className="sidebar-empty" role="status">Loading…</p>}>
-        {panel === "ask" ? <AskPanel reflowable store={askStore} getContext={getAskContext} hasDocument pageLabels={null} openThreadId={openThreadId} onOpenThread={setOpenThreadId}
-          onJob={trackJob} onReturnToPassage={(thread) => { if (thread.anchor) goTo(thread.anchor); }}
-          onDiveFromAnswer={diveFromAnswer}
-          onJumpToSource={jumpSource} focusRequest={askFocus} attachments={attachments} onAddToQuestion={(kind, text) => { const attachment = makeAttachment(kind, text); if (attachment) setAttachments((previous) => addAttachment(previous, attachment)); }}
-          onRemoveAttachment={(id) => setAttachments((previous) => previous.filter((attachment) => attachment.id !== id))} onClearAttachments={() => setAttachments([])}
-          onPin={(text, context) => changePins([{ id: crypto.randomUUID(), text, context, createdAt: new Date().toISOString() }, ...pins])} /> :
-        panel === "glossary" ? <GlossaryPanel store={glossary} pageLabels={null} focusRequest={glossaryFocus} onJumpToRef={jumpGlossary}
+        {panel === "glossary" ? <GlossaryPanel store={glossary} pageLabels={null} focusRequest={glossaryFocus} onJumpToRef={jumpGlossary}
           onRetry={(id) => void runGlossaryJob(glossary, id, glossaryContext())} onDelete={(id) => { cancelGlossaryJob(id); glossary.remove(id); }}
           marksVisible={glossaryMarksVisible} onMarksVisibleChange={(visible) => { setGlossaryMarksVisible(visible); try { localStorage.setItem("glossary-marks-visible", String(visible)); } catch { /* session preference */ } }} /> :
         panel === "toc" ? <>
@@ -446,13 +463,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
             {deferredQuery.trim() ? <p className="sidebar-hint">{searchMatches.length === 200 ? "First 200" : searchMatches.length} matches</p> : <p className="sidebar-empty">Search the document’s text.</p>}
             {searchMatches.map((match, index) => <button type="button" key={index} onClick={() => goTo(match.anchor)}><small>{anchorLabel(model, match.anchor)}</small>
               {match.before}<mark>{match.match}</mark>{match.after}</button>)}
-          </div></> : <NativeAnnotationsPanel
-          engine={engine} annotations={annotations} pins={pins} notes={notes} askStore={askStore} currentUnit={currentUnit}
-          activeId={selection?.annotationId ?? annotations.find((item) => item.anchor === flash)?.id}
-          editRequestId={pendingStickerId} onEditRequestHandled={handledStickerEdit}
-          onOpen={goTo} onHover={setHoveredAnnotationId} onDelete={deleteAnnotation} onEdit={editAnnotation} onOpenDive={openAnnotationDive}
-          onDeletePin={deletePin} onEditPin={editPin} onAddNote={addNote} onEditNote={editNote} onDeleteNote={deleteNote}
-          onJumpToSource={jumpSource} />}
+          </div></> : null}
 
       </Suspense>
     </SidebarFrame> : null}
@@ -466,32 +477,33 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
         onBack={(steps) => goHistory("back", steps)} onForward={(steps) => goHistory("forward", steps)}
         onNavigate={goTo} focusRequest={navigationFocusRequest} />
     </main>
+    <Suspense fallback={null}><NotebookDock open={notebookOpen || panel === "ask"} onClose={() => { setNotebookOpen(false); if (panel === "ask") setPanel(null); }} title={session.meta.title} currentPosition={currentUnit} sections={notebookSections} askSlot={panel === "ask" ? <SidebarFrame onClose={() => setPanel(null)}>{askPanel}</SidebarFrame> : null} onCloseAsk={() => setPanel(null)} /></Suspense>
     {selection ? createPortal(<FloatingTip key={selection.annotationId ?? `${selection.anchor.kind}-${engine.unitForAnchor(selection.anchor)}`} anchorRect={selection.rect} onClose={closeTip} deps={[tipGlossaryId]}>
       {tipGlossaryId ? <Suspense fallback={<p role="status">Loading definition…</p>}><GlossaryCard store={glossary} entryId={tipGlossaryId}
         onOpenInGlossary={(entryId) => { setPanel("glossary"); setGlossaryFocus({ entryId, nonce: Date.now() }); closeTip(); }}
         onRetry={(id) => void runGlossaryJob(glossary, id, glossaryContext())} onJumpToRef={jumpGlossary} pageLabel={(unit) => engine.labelForUnit(unit)} /></Suspense> :
-      <NativeSelectionTip annotation={selectedAnnotation} text={anchorText(model, selection.anchor)} pen={pen}
+      <NativeSelectionTip onOpenNote={() => { const annotation = selectedAnnotation ?? saveAnnotation(selection.anchor, "highlight"); notebook.reveal(captureEntryId(`native:${annotation.id}`)); closeTip(); }} annotation={selectedAnnotation} text={anchorText(model, selection.anchor)} pen={pen}
         onSave={(comment, color, style) => {
           if (selectedAnnotation) changeAnnotations(annotations.map((item) => item.id === selectedAnnotation.id ? { ...item, comment, color, style } : item));
           else { saveAnnotation(selection.anchor, "highlight", comment, color, style); closeTip(); window.getSelection()?.removeAllRanges(); }
         }} onDelete={() => { if (selectedAnnotation) changeAnnotations(annotations.filter((item) => item.id !== selectedAnnotation.id)); closeTip(); }}
         onPaper={(paper) => { if (selectedAnnotation) changeAnnotations(annotations.map((item) => item.id === selectedAnnotation.id ? { ...item, paper } : item)); }}
         onDive={() => dive(selection.anchor)} onAddToQuestion={() => addToQuestion(selection.anchor)}
-        onPin={() => changePins([{ id: crypto.randomUUID(), text: anchorText(model, selection.anchor), context: anchorLabel(model, selection.anchor), createdAt: new Date().toISOString() }, ...pins])}
+        onPin={() => { const anchor = selection.anchor; void saveNotebookExcerpt(notebook, anchorText(model, anchor), { locationLabel: anchorLabel(model, anchor), position: engine.unitForAnchor(anchor), native: { id: crypto.randomUUID(), kind: "highlight", anchor, text: anchorText(model, anchor), comment: "", color: pen.color, style: pen.style, createdAt: new Date().toISOString() } }); closeTip(); }}
         onGlossary={() => { const id = addGlossaryTerm(glossary, anchorText(model, selection.anchor), engine.unitForAnchor(selection.anchor), glossaryContext()); if (id) setTipGlossaryId(id); }} />}
     </FloatingTip>, document.body) : null}
-  </div>;
+  </div></NotebookProvider>;
 }
 
-function NativeSelectionTip({ annotation, text, pen, onSave, onDelete, onPaper, onDive, onAddToQuestion, onPin, onGlossary }: {
-  annotation?: DocumentAnnotation; text: string; pen: HighlightPen;
+function NativeSelectionTip({ onOpenNote, annotation, text, pen, onSave, onDelete, onPaper, onDive, onAddToQuestion, onPin, onGlossary }: {
+  onOpenNote: () => void; annotation?: DocumentAnnotation; text: string; pen: HighlightPen;
   onSave: (comment: string, color: string, style: DocumentAnnotation["style"]) => void;
   onDelete: () => void; onPaper: (paper: string) => void; onDive: () => void; onAddToQuestion: () => void; onPin: () => void; onGlossary: () => void;
 }) {
   const isSticker = annotation?.kind === "sticker";
   const [style, setStyle] = useState(annotation?.style ?? pen.style);
   const ref = useRef<HTMLDivElement>(null);
-  const note = useNoteControl({ comment: annotation?.comment, onCommit: (comment) => onSave(comment, annotation?.color ?? pen.color, style), classPrefix: "TextHighlight", containerRef: ref });
+  const note = { panel: null, button: <button type="button" className="TextHighlight__comment-button" onClick={onOpenNote}>Note</button> };
   return <div ref={ref} className="flow-selection-tip">
     <HighlightToolbar copyText={text} note={note} onStartDive={onDive} onAddToQuestion={onAddToQuestion}
       onAddToGlossary={text ? onGlossary : undefined} glossaryDisabledReason={isGlossaryCandidate(text) ? undefined : "Select a term of up to eight words"}

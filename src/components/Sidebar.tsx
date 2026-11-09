@@ -1,8 +1,5 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import type { CommentedHighlight } from "../types";
-import type { DiveHighlight, DivePanel, GeneralNote, Pin } from "../deepdive/types";
 import SidebarFrame from "./SidebarFrame";
-import PdfAnnotationsPanel from "./PdfAnnotationsPanel";
 import TableOfContentsPanel from "./TableOfContentsPanel";
 import GlossaryPanel, { type GlossaryFocusRequest } from "./GlossaryPanel";
 import SearchPanel, { type SearchMatch } from "./SearchPanel";
@@ -17,26 +14,6 @@ import type { Attachment } from "../grounding/attachments";
 export type SidebarPanel = "annotations" | "toc" | "glossary" | "search" | "ask";
 
 interface SidebarProps {
-  highlights: CommentedHighlight[];
-  pins: Pin[];
-  panels: DivePanel[];
-  diveHighlights: DiveHighlight[];
-  scrolledToHighlightId: string | null;
-  onJumpToHighlight: (highlight: CommentedHighlight) => void;
-  onDeleteHighlight: (highlight: CommentedHighlight) => void;
-  onEditHighlightComment: (highlight: CommentedHighlight, comment: string) => void;
-  onEditFreetextText: (highlight: CommentedHighlight, text: string) => void;
-  onHoverHighlight: (highlightId: string | null) => void;
-  onOpenDiveFromHighlight: (highlight: CommentedHighlight) => void;
-  onDeletePin: (pinId: string) => void;
-  onEditPinComment: (pinId: string, comment: string) => void;
-  onOpenDiveHighlight: (highlight: DiveHighlight) => void;
-  onDeleteDiveHighlight: (highlightId: string) => void;
-  onEditDiveHighlightComment: (highlightId: string, comment: string) => void;
-  generalNotes: GeneralNote[];
-  onAddNote: (text: string) => void;
-  onEditGeneralNote: (id: string, text: string) => void;
-  onDeleteGeneralNote: (id: string) => void;
   activePanel: SidebarPanel | null;
   onSelectPanel: (panel: SidebarPanel) => void;
   pdfDocument: PDFDocumentProxy | null;
@@ -68,26 +45,6 @@ interface SidebarProps {
 }
 
 export default function Sidebar({
-  highlights,
-  pins,
-  panels,
-  diveHighlights,
-  scrolledToHighlightId,
-  onJumpToHighlight,
-  onDeleteHighlight,
-  onEditHighlightComment,
-  onEditFreetextText,
-  onHoverHighlight,
-  onOpenDiveFromHighlight,
-  onDeletePin,
-  onEditPinComment,
-  onOpenDiveHighlight,
-  onDeleteDiveHighlight,
-  onEditDiveHighlightComment,
-  generalNotes,
-  onAddNote,
-  onEditGeneralNote,
-  onDeleteGeneralNote,
   activePanel,
   onSelectPanel,
   pdfDocument,
@@ -123,34 +80,7 @@ export default function Sidebar({
 
   return (
     <SidebarFrame onClose={() => onSelectPanel(activePanel)}>
-        {activePanel === "annotations" ? (
-          <PdfAnnotationsPanel
-            highlights={highlights}
-            pins={pins}
-            panels={panels}
-            diveHighlights={diveHighlights}
-            scrolledToHighlightId={scrolledToHighlightId}
-            onJumpToHighlight={onJumpToHighlight}
-            onDeleteHighlight={onDeleteHighlight}
-            onEditHighlightComment={onEditHighlightComment}
-            onEditFreetextText={onEditFreetextText}
-            onHoverHighlight={onHoverHighlight}
-            onOpenDiveFromHighlight={onOpenDiveFromHighlight}
-            onJumpToSource={onJumpToSource}
-            onDeletePin={onDeletePin}
-            onEditPinComment={onEditPinComment}
-            onOpenDiveHighlight={onOpenDiveHighlight}
-            onDeleteDiveHighlight={onDeleteDiveHighlight}
-            onEditDiveHighlightComment={onEditDiveHighlightComment}
-            generalNotes={generalNotes}
-            onAddNote={onAddNote}
-            onEditGeneralNote={onEditGeneralNote}
-            onDeleteGeneralNote={onDeleteGeneralNote}
-            pageLabels={pageLabels}
-            pdfDocument={pdfDocument}
-            currentPage={currentPage}
-          />
-        ) : activePanel === "search" ? (
+        {activePanel === "search" ? (
           <SearchPanel
             pdfDocument={pdfDocument}
             pageLabels={pageLabels}

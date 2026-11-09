@@ -81,6 +81,50 @@ export function serializeRange(range: Range): string {
   return serializeContents(widenOverKatex(range));
 }
 
+// Notebook captures preserve formatting as well as the stable matching text
+// used by dive annotations. Serialize the selected fragment, not its entire
+// answer, and widen partial equations before copying their TeX source.
+export function serializeRichRange(range: Range): string {
+  const fragment = widenOverKatex(range).cloneContents();
+  for (const tooltip of fragment.querySelectorAll(".dive-turn-highlight-tooltip")) tooltip.remove();
+  for (const math of fragment.querySelectorAll(KATEX_SELECTOR)) {
+    if (!fragment.contains(math)) continue;
+    const tex = math.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
+    if (tex) math.replaceWith(document.createTextNode(math.classList.contains("katex-display") ? `\n$$\n${tex}\n$$\n` : `$${tex}$`));
+  }
+  for (const chip of fragment.querySelectorAll(".cite-chip")) {
+    const labels = chip.getAttribute("data-source-labels"), kind = chip.getAttribute("data-citation-kind");
+    chip.replaceWith(document.createTextNode(kind === "general" ? " [general]" : labels ? ` [${kind === "inferred" ? "inferred: " : ""}${labels}]` : ""));
+  }
+  const read = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent?.replace(/\u00a0/g, " ") ?? "";
+    const element = node as Element;
+    const children = () => Array.from(node.childNodes).map(read).join("");
+    switch (element.tagName?.toLowerCase()) {
+      case "strong": case "b": return `**${children()}**`;
+      case "em": case "i": return `*${children()}*`;
+      case "s": case "del": return `~~${children()}~~`;
+      case "pre": return `\n\n\`\`\`${element.querySelector("code")?.className.match(/language-([\w+-]+)/)?.[1] ?? ""}\n${element.textContent ?? ""}\n\`\`\`\n\n`;
+      case "code": return `\`${children()}\``;
+      case "br": return "\n";
+      case "p": case "div": return `${children()}\n\n`;
+      case "h1": case "h2": case "h3": case "h4": return `${"#".repeat(Number(element.tagName.slice(1)))} ${children()}\n\n`;
+      case "li": return `- ${children().trim()}\n`;
+      case "ul": case "ol": return `\n${children()}\n`;
+      case "blockquote": return `${children().trim().split("\n").map((line) => `> ${line}`).join("\n")}\n\n`;
+      case "a": return element.getAttribute("href") && element.getAttribute("href") !== "#" ? `[${children()}](${element.getAttribute("href")})` : children();
+      case "img": return `![${element.getAttribute("alt") ?? ""}](${element.getAttribute("src") ?? ""})`;
+      case "table": {
+        const rows = Array.from(element.querySelectorAll("tr")).map((row) => `| ${Array.from(row.children).map((cell) => read(cell).trim().replace(/\n/g, "<br>").replace(/\|/g, "\\|")).join(" | ")} |`);
+        if (rows.length) rows.splice(1, 0, `| ${Array.from(element.querySelector("tr")?.children ?? []).map(() => "---").join(" | ")} |`);
+        return `\n\n${rows.join("\n")}\n\n`;
+      }
+      default: return children();
+    }
+  };
+  return read(fragment).trim();
+}
+
 // Which copy of `text` within `container` (one turn's rendered markdown)
 // the reader selected — counted in the same whitespace-free, "$tex$"-for-
 // equations form annotate.ts matches in, so a phrase appearing more than

@@ -1,9 +1,10 @@
 import { useEffect, useState, type RefObject } from "react";
 import type { AnchorRect } from "./useFlippedPlacement";
-import { selectionOccurrence, serializeElement, serializeRange } from "./selectionText";
+import { selectionOccurrence, serializeElement, serializeRange, serializeRichRange } from "./selectionText";
 
 export interface CapturedSelection {
   text: string;
+  markdown?: string;
   context: string;
   anchorRect: AnchorRect;
   // Where the selection sits — the turn (see data-turn-index on each turn's
@@ -55,6 +56,7 @@ export function useSelectionCapture(
         const rect = range.getBoundingClientRect();
         setCaptured({
           text,
+          markdown: serializeRichRange(range),
           context,
           anchorRect: { left: rect.left, top: rect.top, bottom: rect.bottom },
           ...placement,

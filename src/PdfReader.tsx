@@ -1,10 +1,14 @@
+import { revealConversationTurn } from "./notebook/revealTurn";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
   useReducer,
   useRef,
   useState,
+  type SetStateAction,
 } from "react";
 import {
   exportPdf,
@@ -30,15 +34,15 @@ import type { CommentedHighlight } from "./types";
 import "./App.css";
 import PersistentPdfPane from "./deepdive/PersistentPdfPane";
 import DeepDiveView from "./deepdive/DeepDiveView";
-import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, SummaryJobState, GeneralNote, Pin } from "./deepdive/types";
+import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, SummaryJobState } from "./deepdive/types";
 import {
   ancestorChain,
   appendTurn,
+  restorePanelTurns,
   createNestedPanel,
   createRootPanel,
   paneWindow,
   panelById,
-  panelSubtreeIds,
   historyTurns,
   replacePanel,
   rootPanelOf,
@@ -97,6 +101,26 @@ import { NavigationHistory, placeFromScroll, scrollTopForPlace, type ReadingPlac
 import { formatPageLabel } from "./pageLabels";
 import type { GlossaryEntry, GlossaryRef } from "./glossary/types";
 
+import { useDraftAttachments } from "./notebook/drafts";
+import { NotebookStore, usePdfMarks, useDiveMarks } from "./notebook/store";
+import { useReaderPersistence } from "./notebook/useReaderPersistence";
+import { NotebookProvider } from "./notebook/context";
+import { saveGlossaryDefinition } from "./notebook/glossaryCapture";
+import { saveNotebookExcerpt } from "./notebook/capture";
+import { captureEntryId } from "./notebook/model";
+import type { NotebookCapture } from "./notebook/model";
+function useNotebookOutline(pdf: PDFDocumentProxy | null) {
+  const [sections, setSections] = useState<{ id: string; title: string; position: number }[]>([]);
+  useEffect(() => { let cancelled = false;
+    if (!pdf) { setSections([]); return; }
+    void pdf.getOutline().then(async (outline) => {
+      const rows = await Promise.all((outline ?? []).map(async (item, i) => { const dest = typeof item.dest === "string" ? await pdf.getDestination(item.dest) : item.dest; const ref = dest?.[0]; const page = typeof ref === "number" ? ref + 1 : ref ? await pdf.getPageIndex(ref) + 1 : undefined; return page ? { id: `source:${page}:${i}`, title: item.title, position: page } : null; }));
+      if (!cancelled) setSections(rows.filter((row): row is NonNullable<typeof row> => !!row));
+    }).catch(() => {}); return () => { cancelled = true; };
+  }, [pdf]); return sections;
+}
+const NotebookDock = lazy(() => import("./notebook/NotebookDock"));
+
 type PdfSource = string | Uint8Array;
 
 interface LoadedPdf {
@@ -150,26 +174,6 @@ function loadHighlightPen(): HighlightPen {
   return DEFAULT_HIGHLIGHT_PEN;
 }
 
-// ⌘Z undoes changes to the PDF's own annotations (highlights and sticky
-// notes): creating, editing, and deleting them.
-const MAX_UNDO_ENTRIES = 100;
-
-// Edits to one annotation this close together (typing into a sticky note,
-// dragging it) undo as one step.
-const UNDO_COALESCE_MS = 1500;
-
-type UndoEntry =
-  | { kind: "add"; id: string }
-  | { kind: "edit"; before: CommentedHighlight; at: number }
-  | {
-      kind: "delete";
-      highlight: CommentedHighlight;
-      index: number;
-      // The dive branch the deletion cascaded to (see deleteHighlight).
-      panels: DivePanel[];
-      diveHighlights: DiveHighlight[];
-    };
-
 function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
@@ -202,7 +206,10 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   onOpenDocument: (meta: DocumentMeta) => void;
 }) {
   const [loadedPdf, setLoadedPdf] = useState<LoadedPdf | null>(null);
-  const [highlights, setHighlights] = useState<CommentedHighlight[]>([]);
+  const [notebook] = useState(() => new NotebookStore(getStorage()));
+  const highlights = usePdfMarks(notebook);
+  const setHighlights = notebook.setPdfHighlights;
+  const [notebookOpen, setNotebookOpen] = useState(true);
   const [panels, setPanels] = useState<DivePanel[]>([]);
   const [diveJobs, setDiveJobs] = useState<Record<string, DiveJobState>>({});
   const [summaryJobs, setSummaryJobs] = useState<Record<string, SummaryJobState>>({});
@@ -217,9 +224,8 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     setDiveJobs({});
     setSummaryJobs({});
   }, []);
-  const [pins, setPins] = useState<Pin[]>([]);
-  const [diveHighlights, setDiveHighlights] = useState<DiveHighlight[]>([]);
-  const [generalNotes, setGeneralNotes] = useState<GeneralNote[]>([]);
+  const diveHighlights = useDiveMarks(notebook);
+  const setDiveHighlights = notebook.setDiveHighlights;
   const [diveFocusId, setDiveFocusId] = useState<string | null>(null);
   // Read by the PDF's highlights, which render in their own React roots
   // (inside react-pdf-highlighter) and so can't rely on fresh props.
@@ -231,6 +237,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const [oneShotTool, setOneShotTool] = useState<"area" | "note" | null>(null);
   const tool: Tool = oneShotTool ?? baseTool;
   const [highlightPen, setHighlightPen] = useState(loadHighlightPen);
+  useEffect(() => { const update = (event: Event) => setHighlightPen((event as CustomEvent<HighlightPen>).detail); window.addEventListener("knowbel-pen-change", update); return () => window.removeEventListener("knowbel-pen-change", update); }, []);
   const [notesCollapsed, setNotesCollapsed] = useState(false);
   const [scrolledToHighlightId, setScrolledToHighlightId] = useState<string | null>(
     null,
@@ -254,6 +261,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     "toc",
   );
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
+  const pdfOutlineSections = useNotebookOutline(pdfDocument);
   const [pageLabels, setPageLabels] = useState<string[] | null>(null);
   // Read by long-lived callbacks (sending a dive message) at call time.
   const pdfDocumentRef = useRef(pdfDocument);
@@ -280,8 +288,17 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const [askFocusRequest, setAskFocusRequest] = useState(0);
   // Text the reader added to their next question ("Add to question"): for
   // the Ask panel, and per dive.
-  const [askAttachments, setAskAttachments] = useState<Attachment[]>([]);
-  const [diveAttachments, setDiveAttachments] = useState<Record<string, Attachment[]>>({});
+  const [askAttachments, updateAskAttachments] = useDraftAttachments(notebook.drafts, `ask:${openAskThreadId ?? "new-question"}`);
+  const askAttachmentSetter = useRef(updateAskAttachments); askAttachmentSetter.current = updateAskAttachments;
+  const setAskAttachments = useCallback((value: SetStateAction<Attachment[]>) => askAttachmentSetter.current(value), []);
+  const [diveAttachments, updateDiveAttachments] = useState<Record<string, Attachment[]>>({});
+  const diveAttachmentMap = useRef(diveAttachments); diveAttachmentMap.current = diveAttachments;
+  const setDiveAttachments = useCallback((action: SetStateAction<Record<string, Attachment[]>>) => {
+    const next = typeof action === "function" ? action(diveAttachmentMap.current) : action;
+    diveAttachmentMap.current = next;
+    for (const [id, value] of Object.entries(next)) notebook.drafts?.setAttachments(`dive:${id}`, value);
+    updateDiveAttachments(next);
+  }, [notebook]);
   // Where the reader was before each jump (Back) and where Back took them
   // from (Forward) — kept outside React, so each change bumps
   // a version to re-render the page navigator. `recentJump` is the latest
@@ -329,7 +346,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const readingStateTimer = useRef<number | undefined>(undefined);
   const readingState = {
     lastPage: currentPage,
-    view: { zoom: pdfScaleValue, twoPage: twoPageView, continuous: continuousScroll, panel: activeSidebarPanel },
+    view: { zoom: pdfScaleValue, twoPage: twoPageView, continuous: continuousScroll, panel: activeSidebarPanel, notebookOpen, threadId: openAskThreadId },
   };
   const readingStateRef = useRef(readingState);
   readingStateRef.current = readingState;
@@ -355,13 +372,13 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     if (!openMetaRef.current) return;
     window.clearTimeout(readingStateTimer.current);
     readingStateTimer.current = window.setTimeout(() => void flushReadingState(), 800);
-  }, [currentPage, pdfScaleValue, twoPageView, continuousScroll, activeSidebarPanel, flushReadingState]);
+  }, [currentPage, pdfScaleValue, twoPageView, continuousScroll, activeSidebarPanel, notebookOpen, openAskThreadId, flushReadingState]);
   const { theme, toggleTheme } = useTheme();
 
   const highlighterUtilsRef = useRef<PdfHighlighterUtils | null>(null);
   const highlightsRef = useRef(highlights);
   highlightsRef.current = highlights;
-  const undoStackRef = useRef<UndoEntry[]>([]);
+
   const panelsRef = useRef<DivePanel[]>([]);
   const workspaceSlotRef = useRef<HTMLDivElement | null>(null);
   const deepDiveRootSlotRef = useRef<HTMLDivElement | null>(null);
@@ -449,38 +466,16 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     return () => window.clearTimeout(timer);
   }, [pdfDocument]);
 
-  useEffect(() => {
-    if (!loadedPdf) return;
-    docDataWriter.schedule(loadedPdf.docId, "highlights", highlights);
-  }, [docDataWriter, highlights, loadedPdf]);
 
   useEffect(() => {
     if (!loadedPdf) return;
     docDataWriter.schedule(loadedPdf.docId, "dives", panels);
   }, [docDataWriter, panels, loadedPdf]);
 
-  useEffect(() => {
-    if (!loadedPdf) return;
-    docDataWriter.schedule(loadedPdf.docId, "pins", pins);
-  }, [docDataWriter, pins, loadedPdf]);
 
-  useEffect(() => {
-    if (!loadedPdf) return;
-    docDataWriter.schedule(loadedPdf.docId, "diveHighlights", diveHighlights);
-  }, [docDataWriter, diveHighlights, loadedPdf]);
 
-  useEffect(() => {
-    if (!loadedPdf) return;
-    docDataWriter.schedule(loadedPdf.docId, "generalNotes", generalNotes);
-  }, [docDataWriter, generalNotes, loadedPdf]);
 
-  // Saves are debounced; don't lose the last few hundred milliseconds of
-  // changes when the window closes.
-  useEffect(() => {
-    const flush = () => void docDataWriter.flush();
-    window.addEventListener("pagehide", flush);
-    return () => window.removeEventListener("pagehide", flush);
-  }, [docDataWriter]);
+  useReaderPersistence({ checkpoint: notebook.checkpoint, cancel: () => { notebook.cancelJobs(); cancelDiveJobs(); }, flush: () => Promise.all([notebook.flush(), docDataWriter.flush(), flushReadingState()]) });
 
   // The file name lives in the window title now that there's no top bar.
   useEffect(() => {
@@ -602,7 +597,9 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const openPdf = useCallback(
     async (bytes: Uint8Array, fileName: string, options: { legacyFile?: File; docId?: string } = {}) => {
       // The previous document's pending saves go to the previous document.
-      await docDataWriter.flush();
+      notebook.cancelJobs();
+      cancelDiveJobs();
+      await Promise.all([docDataWriter.flush(), notebook.flush()]);
       await flushReadingState();
 
       let opened;
@@ -627,14 +624,11 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         const value = opened.data[kind];
         return Array.isArray(value) ? (value as T[]) : [];
       };
-      const loadedHighlights = stored<CommentedHighlight>("highlights");
-      const loadedPanels = stored<DivePanel>("dives").map((panel) => {
-        const last = panel.turns[panel.turns.length - 1];
-        return last?.role === "user" ? appendTurn(panel, "assistant", "The response was interrupted. Please retry.", { status: "error" }) : panel;
-      });
-      const loadedPins = stored<Pin>("pins");
-      const loadedDiveHighlights = stored<DiveHighlight>("diveHighlights");
-      const loadedGeneralNotes = stored<GeneralNote>("generalNotes");
+      await notebook.load(docId, opened.data);
+      const loadedHighlights = notebook.getPdfHighlights();
+      const storedPanels = stored<DivePanel>("dives");
+      const loadedPanels = restorePanelTurns(storedPanels);
+      const loadedDiveHighlights = notebook.getDiveHighlights();
       const loadedGlossary = stored<GlossaryEntry>("glossary");
       const loadedThreads = stored<AskThread>("threads");
 
@@ -648,30 +642,25 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         title: opened.meta.title,
         ...(opened.meta.source ? { sourceUrl: opened.meta.source.canonicalUrl || opened.meta.source.url } : {}),
       });
-      // Prime with the arrays actually put in state, so the save effects
-      // see them as already stored and don't write them straight back.
+      // Prime acknowledged records. Normalized legacy turns deliberately differ
+      // and are saved once, so notebook conversation links remain stable.
       docDataWriter.prime(docId, "highlights", loadedHighlights);
-      docDataWriter.prime(docId, "dives", loadedPanels);
-      docDataWriter.prime(docId, "pins", loadedPins);
+      docDataWriter.prime(docId, "dives", storedPanels);
       docDataWriter.prime(docId, "diveHighlights", loadedDiveHighlights);
-      docDataWriter.prime(docId, "generalNotes", loadedGeneralNotes);
-      setHighlights(loadedHighlights);
+
       setPanels(loadedPanels);
-      setPins(loadedPins);
-      setDiveHighlights(loadedDiveHighlights);
-      setGeneralNotes(loadedGeneralNotes);
+
       glossaryStore.load(loadedGlossary, (entries) => docDataWriter.schedule(docId, "glossary", entries));
       askStore.load(loadedThreads, (threads) => docDataWriter.schedule(docId, "threads", threads));
-      setOpenAskThreadId(null);
-      setAskAttachments([]);
-      setDiveAttachments({});
+      setOpenAskThreadId(opened.meta.view?.threadId ?? null);
+      setDiveAttachments(notebook.drafts?.attachmentMap("dive:") ?? {});
       setGlossaryFlash(null);
       navHistory.clear();
       bumpHistory();
       setRecentJump(null);
       setBaseTool("select");
       setOneShotTool(null);
-      undoStackRef.current = [];
+
       setDiveFocusId(null);
       setPdfDocument(null);
       // Back where the reader left off: page, zoom, layout, open panel.
@@ -684,9 +673,10 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       pendingZoomRef.current = view?.zoom ?? null;
       setTwoPageView(view?.twoPage ?? false);
       setContinuousScroll(view?.continuous ?? true);
-      setActiveSidebarPanel(view ? (view.panel as SidebarPanel | null) : "toc");
+      setActiveSidebarPanel(view?.panel === "annotations" ? null : view ? (view.panel as SidebarPanel | null) : null);
+      setNotebookOpen(view?.notebookOpen ?? true);
     },
-    [askStore, cancelDiveJobs, docDataWriter, flushReadingState, glossaryStore, navHistory],
+    [askStore, cancelDiveJobs, docDataWriter, flushReadingState, glossaryStore, navHistory, notebook, setDiveAttachments],
   );
 
   const loadPdfFile = useCallback(
@@ -697,7 +687,8 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         if (meta) {
           cancelDiveJobs();
           for (const entry of glossaryStore.getSnapshot()) cancelGlossaryJob(entry.id);
-          await docDataWriter.flush();
+          notebook.cancelJobs();
+          await Promise.all([docDataWriter.flush(), notebook.flush()]);
           await flushReadingState();
           onOpenDocument(meta);
         } else showNotice("Couldn't read this Markdown file.");
@@ -729,7 +720,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       }
       await openPdf(epub.pdf, file.name, { docId: epub.docId });
     },
-    [openPdf, cancelDiveJobs, glossaryStore, docDataWriter, flushReadingState, onOpenDocument],
+    [openPdf, cancelDiveJobs, glossaryStore, docDataWriter, flushReadingState, onOpenDocument, notebook],
   );
 
   const openFromLibrary = useCallback(
@@ -747,13 +738,14 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   );
 
   useEffect(() => {
-    void openFromLibrary(initialDocument);
+    void openFromLibrary(initialDocument).catch((error) => showNotice(error instanceof Error ? error.message : "Couldn’t open the document."));
   }, [initialDocument, openFromLibrary]);
 
   // Back to the library, saving everything about the document first.
   const goHome = useCallback(async () => {
     cancelDiveJobs();
-    await docDataWriter.flush();
+    notebook.cancelJobs();
+    await Promise.all([docDataWriter.flush(), notebook.flush()]);
     await flushReadingState();
     openMetaRef.current = null;
     setActiveDocument(null);
@@ -761,19 +753,22 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     setPdfDocument(null);
     setLoadedPdf(null);
     onHome();
-  }, [cancelDiveJobs, docDataWriter, flushReadingState, onHome]);
-
-  const pushUndo = (entry: UndoEntry) => {
-    const stack = undoStackRef.current;
-    stack.push(entry);
-    if (stack.length > MAX_UNDO_ENTRIES) stack.shift();
-  };
+  }, [cancelDiveJobs, docDataWriter, flushReadingState, onHome, notebook]);
 
   const addHighlight = (
     highlight: GhostHighlight,
     comment: string,
     style?: Pick<CommentedHighlight, "highlightColor" | "highlightStyle">,
   ) => {
+    const rect = highlight.position.boundingRect;
+    const existing = notebook.getSnapshot().captures.find((capture) => {
+      const raw = capture.pdf, previous = raw?.position?.boundingRect;
+      return raw?.type === highlight.type && previous?.pageNumber === rect.pageNumber && raw.content?.text?.replace(/\s+/g, " ") === highlight.content.text?.replace(/\s+/g, " ") && ["x1", "x2", "y1", "y2"].every((axis) => { const key = axis as "x1" | "x2" | "y1" | "y2"; const dimension = key.startsWith("x") ? "width" : "height"; return Math.abs(previous[key] / previous[dimension] - rect[key] / rect[dimension]) < 0.0001; });
+    });
+    if (existing?.pdf) {
+      if (!existing.visible) setHighlights((previous) => [{ ...existing.pdf!, ...(comment ? { comment } : {}) }, ...previous]);
+      return existing.pdf.id;
+    }
     const next: CommentedHighlight = {
       ...highlight,
       ...style,
@@ -782,21 +777,14 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       createdAt: new Date().toISOString(),
     };
     setHighlights((previous) => [next, ...previous]);
-    pushUndo({ kind: "add", id: next.id });
     if (highlight.type === "area") setOneShotTool((current) => (current === "area" ? null : current));
+    return next.id;
   };
 
   const editHighlight = (
     idToUpdate: string,
     edit: Partial<CommentedHighlight>,
   ) => {
-    const last = undoStackRef.current[undoStackRef.current.length - 1];
-    if (last?.kind === "edit" && last.before.id === idToUpdate && Date.now() - last.at < UNDO_COALESCE_MS) {
-      last.at = Date.now();
-    } else {
-      const before = highlightsRef.current.find((highlight) => highlight.id === idToUpdate);
-      if (before) pushUndo({ kind: "edit", before, at: Date.now() });
-    }
     setHighlights((previous) =>
       previous.map((highlight) =>
         highlight.id === idToUpdate ? { ...highlight, ...edit } : highlight,
@@ -804,84 +792,8 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     );
   };
 
-  // Cascade-deletes a dive panel and every panel nested beneath it, along
-  // with the dive highlights placed inside any of them — an annotation's
-  // dive branch is part of that annotation, not independent of it, so
-  // deleting the annotation takes the whole branch with it rather than
-  // leaving orphaned panels/highlights behind. If the panel currently being
-  // viewed is inside what's being removed, focus falls back to
-  // `fallbackFocusId` (the panel that anchored the deleted branch, or null
-  // for the main workspace) so the view doesn't keep pointing at deleted
-  // content.
-  const deletePanelSubtree = useCallback((panelId: string, fallbackFocusId: string | null) => {
-    const idsToDelete = panelSubtreeIds(panelsRef.current, panelId);
-    for (const id of idsToDelete) {
-      diveControllers.current.get(id)?.abort();
-      diveControllers.current.delete(id);
-      summaryControllers.current.get(id)?.abort();
-      summaryControllers.current.delete(id);
-      diveScrollPositions.current.delete(id);
-    }
-    setDiveJobs((jobs) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !idsToDelete.has(id))));
-    setSummaryJobs((jobs) => Object.fromEntries(Object.entries(jobs).filter(([id]) => !idsToDelete.has(id))));
-    setPanels((previous) => previous.filter((panel) => !idsToDelete.has(panel.id)));
-    setDiveHighlights((previous) => previous.filter((highlight) => !idsToDelete.has(highlight.panelId)));
-    setDiveFocusId((current) => (current && idsToDelete.has(current) ? fallbackFocusId : current));
-  }, []);
-
-  const deleteHighlight = (highlightId: string) => {
-    const index = highlights.findIndex((h) => h.id === highlightId);
-    const highlight = highlights[index];
-    if (!highlight) return;
-    const branchIds = highlight.divePanelId
-      ? panelSubtreeIds(panelsRef.current, highlight.divePanelId)
-      : new Set<string>();
-    pushUndo({
-      kind: "delete",
-      highlight,
-      index,
-      panels: panelsRef.current.filter((panel) => branchIds.has(panel.id)),
-      diveHighlights: diveHighlights.filter((h) => branchIds.has(h.panelId)),
-    });
-    setHighlights((previous) =>
-      previous.filter((highlight) => highlight.id !== highlightId),
-    );
-    if (highlight.divePanelId) deletePanelSubtree(highlight.divePanelId, null);
-  };
-
-  const undo = () => {
-    const entry = undoStackRef.current.pop();
-    if (!entry) return;
-    if (entry.kind === "add") {
-      // A highlight dived into since it was made now anchors a conversation;
-      // undoing it would take that with it, so it stays.
-      if (highlightsRef.current.find((h) => h.id === entry.id)?.divePanelId) return;
-      setHighlights((previous) => previous.filter((h) => h.id !== entry.id));
-    } else if (entry.kind === "edit") {
-      setHighlights((previous) =>
-        previous.map((h) =>
-          h.id === entry.before.id ? { ...entry.before, divePanelId: h.divePanelId } : h,
-        ),
-      );
-    } else {
-      setHighlights((previous) => {
-        if (previous.some((h) => h.id === entry.highlight.id)) return previous;
-        const next = [...previous];
-        next.splice(Math.min(entry.index, next.length), 0, entry.highlight);
-        return next;
-      });
-      if (entry.panels.length > 0) {
-        setPanels((previous) => [
-          ...previous,
-          ...entry.panels.filter((panel) => !previous.some((p) => p.id === panel.id)),
-        ]);
-        setDiveHighlights((previous) => [
-          ...entry.diveHighlights.filter((h) => !previous.some((p) => p.id === h.id)),
-          ...previous,
-        ]);
-      }
-    }
-  };
+  const deleteHighlight = (highlightId: string) => setHighlights((previous) => previous.filter((highlight) => highlight.id !== highlightId));
+  const undo = () => notebook.undo();
 
   const handleFreetextClick = (position: ScaledPosition) => {
     // Sized to fit the placeholder text rather than react-pdf-highlighter-
@@ -903,7 +815,6 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       createdAt: new Date().toISOString(),
     };
     setHighlights((previous) => [next, ...previous]);
-    pushUndo({ kind: "add", id: next.id });
     setOneShotTool((current) => (current === "note" ? null : current));
   };
 
@@ -928,20 +839,9 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     });
   };
 
-  // A freeform note with no page/position of its own — for the Annotations
-  // panel's quick-add textbox, when what's being jotted down isn't "about"
-  // wherever the reader happens to be scrolled to right now.
-  const handleAddGeneralNote = (text: string) => {
-    const next: GeneralNote = { id: getNextId(), text, createdAt: new Date().toISOString() };
-    setGeneralNotes((previous) => [next, ...previous]);
-  };
-
-  const handleEditGeneralNote = (id: string, text: string) => {
-    setGeneralNotes((previous) => previous.map((note) => (note.id === id ? { ...note, text } : note)));
-  };
-
-  const handleDeleteGeneralNote = (id: string) => {
-    setGeneralNotes((previous) => previous.filter((note) => note.id !== id));
+  notebook.onStickyTextChange = (captureId, text) => {
+    const capture = notebook.getCapture(captureId); if (!capture?.pdf) return;
+    const mark = notebook.getPdfHighlights().find((item) => item.id === capture.pdf!.id); if (mark) handleEditFreetextText(mark, text);
   };
 
   const handleExport = async () => {
@@ -1125,6 +1025,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const glossaryBindings = useMemo<GlossaryTipBindings>(
     () => ({
       store: glossaryStore,
+      onSaveToNotebook: (entry) => { void saveGlossaryDefinition(notebook, entry); },
       onAdd: (selection, pageNumber) => {
         const context = glossaryContextRef.current;
         return context ? addGlossaryTerm(glossaryStore, selection, pageNumber, context) : null;
@@ -1138,7 +1039,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       onJumpToRef: (ref) => jumpToGlossaryRefRef.current(ref),
       onRetry: retryGlossaryEntry,
     }),
-    [glossaryStore, retryGlossaryEntry, pageLabelFor],
+    [glossaryStore, retryGlossaryEntry, pageLabelFor, notebook],
   );
 
   const goToPage = (pageNumber: number) => {
@@ -1188,7 +1089,10 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   // Side panels belong to the main workspace, so picking one from the rail
   // while in Deep Dive returns there with that panel open (as "Open in
   // glossary" does).
+  notebook.onReveal = () => setNotebookOpen(true);
   const handleSelectSidebarPanel = (panel: SidebarPanel) => {
+    if (panel === "annotations") { setNotebookOpen((value) => !value); return; }
+    if (panel === "ask") { setNotebookOpen(true); setActiveSidebarPanel((current) => current === "ask" ? null : "ask"); return; }
     if (diveFocusId) {
       setDiveFocusId(null);
       setActiveSidebarPanel(panel);
@@ -1216,7 +1120,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       setAskAttachments((list) => addAttachment(list, attachment));
       setActiveSidebarPanel("ask");
       setAskFocusRequest((value) => value + 1);
-    }, []);
+    }, [setAskAttachments, setDiveAttachments]);
 
   const addToQuestion = useCallback(
     (kind: Attachment["kind"], text: string, pageNumber?: number, divePanelId?: string) => {
@@ -1627,7 +1531,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       setHighlights((previous) => [next, ...previous]);
       createAndOpenDive(panel);
     },
-    [createAndOpenDive],
+    [createAndOpenDive, setHighlights],
   );
 
   const handleDiveIntoExisting = useCallback(
@@ -1658,7 +1562,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       );
       createAndOpenDive(panel);
     },
-    [createAndOpenDive],
+    [createAndOpenDive, setHighlights],
   );
 
   // What a nested dive starts from: the passages the parent answer (the
@@ -1703,7 +1607,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       ]);
       createAndOpenDive(panel);
     },
-    [createAndOpenDive],
+    [createAndOpenDive, setDiveHighlights],
   );
 
   // A suggested dive (the suggestions experiment): reopens the dive on that
@@ -1768,12 +1672,9 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     [loadedPdf, pageLabelFor],
   );
 
-  const handlePin = useCallback((text: string, context: string) => {
-    setPins((previous) => [
-      { id: getNextId(), text, context, createdAt: new Date().toISOString() },
-      ...previous,
-    ]);
-  }, []);
+  const handlePin = useCallback((text: string, context: string, origin: Partial<NotebookCapture> = {}) => {
+    void saveNotebookExcerpt(notebook, text, { context, ...origin });
+  }, [notebook]);
 
   const handleAddDiveHighlight = useCallback(
     (
@@ -1782,12 +1683,9 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       comment: string,
       style?: Pick<DiveHighlight, "highlightColor" | "highlightStyle" | "divePanelId"> & DiveHighlightPlacement,
     ) => {
-      setDiveHighlights((previous) => [
-        { id: getNextId(), panelId, text, comment, ...style, createdAt: new Date().toISOString() },
-        ...previous,
-      ]);
+      return notebook.captureDive({ panelId, text, comment, ...style });
     },
-    [],
+    [notebook],
   );
 
   const handleEditDiveHighlight = useCallback(
@@ -1799,16 +1697,16 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         previous.map((highlight) => (highlight.id === highlightId ? { ...highlight, ...edit } : highlight)),
       );
     },
-    [],
+    [setDiveHighlights],
   );
 
   const handleDeleteDiveHighlight = useCallback(
     (highlightId: string) => {
-      const highlight = diveHighlights.find((h) => h.id === highlightId);
+
       setDiveHighlights((previous) => previous.filter((h) => h.id !== highlightId));
-      if (highlight?.divePanelId) deletePanelSubtree(highlight.divePanelId, highlight.panelId);
+
     },
-    [diveHighlights, deletePanelSubtree],
+    [setDiveHighlights],
   );
 
   // "Dive deeper" from an already-placed dive highlight (its edit toolbar's
@@ -1832,16 +1730,8 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       );
       createAndOpenDive(panel);
     },
-    [createAndOpenDive],
+    [createAndOpenDive, setDiveHighlights],
   );
-
-  const handleDeletePin = (pinId: string) => {
-    setPins((previous) => previous.filter((pin) => pin.id !== pinId));
-  };
-
-  const handleEditPinComment = (pinId: string, comment: string) => {
-    setPins((previous) => previous.map((pin) => (pin.id === pinId ? { ...pin, comment } : pin)));
-  };
 
   const handleOpenDive = (divePanelId: string) => {
     setDiveFocusId(divePanelId);
@@ -1852,37 +1742,6 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   // so its own page is the jump target — no root/anchor tracing needed. Also
   // moves the main PDF there explicitly (see handleOpenDiveHighlight's
   // comment above for why an instant jump, not scrollToHighlight, is used).
-  const handleOpenDiveFromHighlight = (highlight: CommentedHighlight) => {
-    if (!highlight.divePanelId) return;
-    setDiveFocusId(highlight.divePanelId);
-    setScrolledToHighlightId(highlight.id);
-    setCurrentPage(highlight.position.boundingRect.pageNumber);
-    highlighterUtilsRef.current
-      ?.getViewer()
-      ?.scrollPageIntoView({ pageNumber: highlight.position.boundingRect.pageNumber });
-  };
-
-  // From the annotations panel: focus the dive that contains this note and
-  // scroll it into view there (see the scroll effect in DivePanelPane), and
-  // also move the main PDF to this dive branch's starting point — every
-  // dive, however deeply nested, traces back through its parentId chain to
-  // one root panel anchored on a highlight in the main text. PdfPane is
-  // always mounted (see PersistentPdfPane), so this takes effect immediately
-  // even when the main pane isn't part of the current split view (paneWindow
-  // only shows the last two panes) — currentPage is still set alongside it
-  // as the source of truth for other consumers (Sidebar's page display,
-  // goToPage).
-  //
-  // Uses the viewer's own (instant) scrollPageIntoView rather than
-  // scrollToHighlight: setting diveFocusId in the same tick reparents the
-  // main pane (see PersistentPdfPane), whose own layout effect captures
-  // "current page" for scroll preservation across that move. scrollToHighlight
-  // animates with behavior: "smooth", so at the moment that effect reads the
-  // page it's barely left the old one — the capture locks in the wrong page,
-  // and PersistentPdfPane's correction timers spend the next several seconds
-  // fighting our jump back to it. The instant jump lands (and updates the
-  // viewer's currentPageNumber) synchronously, before that effect runs, so it
-  // captures the right page instead.
   const handleOpenDiveHighlight = useCallback(
     (highlight: DiveHighlight) => {
       setDiveFocusId(highlight.panelId);
@@ -1903,6 +1762,18 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     [highlights],
   );
 
+  useEffect(() => { notebook.enrichCaptures((capture) => {
+    if (!capture.dive) return capture;
+    const panel = panels.find((item) => item.id === capture.dive!.panelId);
+    if (!panel) return capture;
+    const root = rootPanelOf(panels, panel.id);
+    const position = root?.pageNumber ?? highlights.find((item) => item.id === root?.anchorHighlightId)?.position.boundingRect.pageNumber;
+    const turn = panel.turns[capture.dive.turnIndex ?? 0];
+    const sources = turn?.sources ?? panel.baseSources;
+    if (capture.position === position && capture.sources === sources && capture.turnId === turn?.id && capture.context === panel.label) return capture;
+    return { ...capture, position, sources, turnId: turn?.id, conversationId: panel.id, context: panel.label };
+  }); }, [notebook, panels, highlights]);
+
   if (!loadedPdf) {
     return <div className="reader-loading" role="status">Opening {initialDocument.title}… <button type="button" onClick={onHome}>Library</button></div>;
   }
@@ -1914,6 +1785,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     pen: highlightPen,
     onFreetextClick: handleFreetextClick,
     addHighlight,
+    onOpenNote: (id: string) => notebook.reveal(captureEntryId(`pdf:${id}`)),
     editHighlight,
     deleteHighlight,
     utilsRef: (utils: PdfHighlighterUtils) => {
@@ -1952,7 +1824,50 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       ? "deep-dive-root"
       : "offscreen";
 
+  const renderSidebar = (panel: SidebarPanel | null) => (<Sidebar
+              activePanel={panel}
+              onSelectPanel={handleSelectSidebarPanel}
+              pdfDocument={pdfDocument}
+              pageLabels={pageLabels}
+              currentPage={currentPage}
+              onGoToPage={goToPage}
+              glossaryStore={glossaryStore}
+              glossaryFocusRequest={glossaryFocusRequest}
+              onJumpToGlossaryRef={jumpToGlossaryRef}
+              onRetryGlossaryEntry={retryGlossaryEntry}
+              onDeleteGlossaryEntry={handleDeleteGlossaryEntry}
+              glossaryMarksVisible={glossaryMarksVisible}
+              onGlossaryMarksVisibleChange={setGlossaryMarksVisible}
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
+              searchFocusRequest={searchFocusRequest}
+              onJumpToSearchMatch={jumpToSearchMatch}
+              askStore={askStore}
+              getAskContext={getAskContext}
+              openAskThreadId={openAskThreadId}
+              onOpenAskThread={setOpenAskThreadId}
+              askFocusRequest={askFocusRequest}
+              onJumpToSource={jumpToSource}
+              askAttachments={askAttachments}
+              onAddToAsk={(kind, text) => addToQuestion(kind, text)}
+              onRemoveAskAttachment={(id) => setAskAttachments((list) => list.filter((a) => a.id !== id))}
+              onClearAskAttachments={() => setAskAttachments([])}
+              onPin={handlePin}
+            />);
+  const notebookSections = pdfOutlineSections;
+
   return (
+    <NotebookProvider value={{ store: notebook, getAskContext, pageLabel: pageLabelFor, onJumpToSource: jumpToSource, onOpenCapture: (capture) => {
+      if (capture.pdf) jumpToHighlight(capture.pdf);
+      else if (capture.dive) handleOpenDiveHighlight(capture.dive);
+      else if (capture.sources?.[0]) jumpToSource({ source: capture.sources[0], range: [capture.sources[0].start, capture.sources[0].end] });
+      else showNotice("The original source location wasn’t recorded. Your saved excerpt is kept here.");
+    }, onHoverCapture: (capture) => setHoveredHighlightId(capture?.pdf?.id ?? null), onOpenConversation: (id, turnId) => {
+      if (panelsRef.current.some((panel) => panel.id === id)) { setDiveFocusId(id); revealConversationTurn(turnId); return true; }
+      if (id.startsWith("glossary:")) { setActiveSidebarPanel("glossary"); setGlossaryFocusRequest({ entryId: id.slice(9), nonce: Date.now() }); return true; }
+      if (askStore.get(id)) { setOpenAskThreadId(id); setActiveSidebarPanel("ask"); setNotebookOpen(true); revealConversationTurn(turnId); return true; }
+      return false;
+    } }}>
     <div className="app-shell">
       {hoveredHighlightId ? (
         <style>{`.highlight-anchor[data-highlight-id="${CSS.escape(hoveredHighlightId)}"] :is(.TextHighlight__part, .AreaHighlight__part, .FreetextHighlight__container) { box-shadow: 0 0 0 2px var(--rphp-accent, #5b50e6); }`}</style>
@@ -1964,12 +1879,13 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         hidden
         onChange={(event) => {
           const file = event.target.files?.[0];
-          if (file) void loadPdfFile(file);
+          if (file) void loadPdfFile(file).catch(() => showNotice("Couldn’t save your changes before opening this file. Keep this document open and retry."));
           event.target.value = "";
         }}
       />
       <AppRail
-        onHome={() => void goHome()}
+        onHome={() => void goHome().catch(() => showNotice("Couldn’t save your changes. Keep this document open and retry."))}
+        notebookOpen={notebookOpen}
         activePanel={diveFocusId ? null : activeSidebarPanel}
         onSelectPanel={handleSelectSidebarPanel}
         tool={tool}
@@ -2063,56 +1979,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
           />
         ) : (
           <div className="workspace">
-            <Sidebar
-              highlights={highlights}
-              pins={pins}
-              panels={panels}
-              diveHighlights={diveHighlights}
-              scrolledToHighlightId={scrolledToHighlightId}
-              onJumpToHighlight={jumpToHighlight}
-              onDeleteHighlight={(highlight) => deleteHighlight(highlight.id)}
-              onHoverHighlight={setHoveredHighlightId}
-              onEditFreetextText={handleEditFreetextText}
-              onEditHighlightComment={(highlight, comment) => editHighlight(highlight.id, { comment })}
-              onOpenDiveFromHighlight={handleOpenDiveFromHighlight}
-              onDeletePin={handleDeletePin}
-              onEditPinComment={handleEditPinComment}
-              onOpenDiveHighlight={handleOpenDiveHighlight}
-              onDeleteDiveHighlight={handleDeleteDiveHighlight}
-              onEditDiveHighlightComment={(highlightId, comment) => handleEditDiveHighlight(highlightId, { comment })}
-              generalNotes={generalNotes}
-              onAddNote={handleAddGeneralNote}
-              onEditGeneralNote={handleEditGeneralNote}
-              onDeleteGeneralNote={handleDeleteGeneralNote}
-              activePanel={activeSidebarPanel}
-              onSelectPanel={handleSelectSidebarPanel}
-              pdfDocument={pdfDocument}
-              pageLabels={pageLabels}
-              currentPage={currentPage}
-              onGoToPage={goToPage}
-              glossaryStore={glossaryStore}
-              glossaryFocusRequest={glossaryFocusRequest}
-              onJumpToGlossaryRef={jumpToGlossaryRef}
-              onRetryGlossaryEntry={retryGlossaryEntry}
-              onDeleteGlossaryEntry={handleDeleteGlossaryEntry}
-              glossaryMarksVisible={glossaryMarksVisible}
-              onGlossaryMarksVisibleChange={setGlossaryMarksVisible}
-              searchQuery={searchQuery}
-              onSearchQueryChange={setSearchQuery}
-              searchFocusRequest={searchFocusRequest}
-              onJumpToSearchMatch={jumpToSearchMatch}
-              askStore={askStore}
-              getAskContext={getAskContext}
-              openAskThreadId={openAskThreadId}
-              onOpenAskThread={setOpenAskThreadId}
-              askFocusRequest={askFocusRequest}
-              onJumpToSource={jumpToSource}
-              askAttachments={askAttachments}
-              onAddToAsk={(kind, text) => addToQuestion(kind, text)}
-              onRemoveAskAttachment={(id) => setAskAttachments((list) => list.filter((a) => a.id !== id))}
-              onClearAskAttachments={() => setAskAttachments([])}
-              onPin={handlePin}
-            />
+            {renderSidebar(activeSidebarPanel === "ask" || activeSidebarPanel === "annotations" ? null : activeSidebarPanel)}
 
             <main className="viewer">
               <div className="pdf-pane-slot" ref={workspaceSlotRef} />
@@ -2120,6 +1987,8 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
           </div>
         )}
       </div>
+
+      <Suspense fallback={notebookOpen ? <aside className="reader-loading">Opening notebook…</aside> : null}><NotebookDock key={loadedPdf.docId} open={notebookOpen || activeSidebarPanel === "ask"} onClose={() => { setNotebookOpen(false); if (activeSidebarPanel === "ask") setActiveSidebarPanel(null); }} title={loadedPdf.title} currentPosition={currentPage} sections={notebookSections} askSlot={activeSidebarPanel === "ask" ? renderSidebar("ask") : null} onCloseAsk={() => setActiveSidebarPanel(null)} /></Suspense>
 
       <PersistentPdfPane
         key={loadedPdf.docId}
@@ -2148,5 +2017,6 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         }
       />
     </div>
+    </NotebookProvider>
   );
 }

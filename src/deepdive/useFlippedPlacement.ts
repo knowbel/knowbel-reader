@@ -36,12 +36,15 @@ export function useFlippedPlacement(
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const height = el.offsetHeight;
-    const below = anchorRect.top - GAP - height < 0;
-    setPlacement({
-      left: anchorRect.left,
-      top: below ? anchorRect.bottom + GAP : anchorRect.top - GAP - height,
-    });
+    const measure = () => {
+      const height = el.offsetHeight, width = el.offsetWidth;
+      const below = anchorRect.top - GAP - height < 0;
+      const next = { left: Math.max(8, Math.min(anchorRect.left, window.innerWidth - width - 8)), top: below ? anchorRect.bottom + GAP : anchorRect.top - GAP - height };
+      setPlacement((previous) => previous.left === next.left && previous.top === next.top ? previous : next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure); observer.observe(el);
+    return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref, anchorRect.left, anchorRect.top, anchorRect.bottom, ...deps]);
 

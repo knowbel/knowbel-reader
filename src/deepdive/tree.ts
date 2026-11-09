@@ -179,3 +179,13 @@ export function historyTurns(turns: DiveTurn[], historyTurns: number, keepOpenin
   const recent = complete.slice(first);
   return keepOpening && first >= 2 ? [complete[0], complete[1], ...recent] : recent;
 }
+
+// Stable identities let saved notebook excerpts return to the same answer
+// after reopening. Reuse the original array when no migration is needed.
+export function restorePanelTurns(stored: DivePanel[]): DivePanel[] {
+  const panels = stored.map((saved) => {
+    const panel = saved.turns.some((turn) => !turn.id) ? { ...saved, turns: saved.turns.map((turn) => turn.id ? turn : { ...turn, id: crypto.randomUUID() }) } : saved;
+    return panel.turns.at(-1)?.role === "user" ? appendTurn(panel, "assistant", "The response was interrupted. Please retry.", { status: "error" }) : panel;
+  });
+  return panels.some((panel, i) => panel !== stored[i]) ? panels : stored;
+}

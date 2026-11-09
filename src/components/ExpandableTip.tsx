@@ -2,17 +2,18 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { GhostHighlight, ScaledPosition } from "react-pdf-highlighter-plus";
 import { usePdfHighlighterContext } from "react-pdf-highlighter-plus";
 import type { CommentedHighlight } from "../types";
-import { useNoteControl } from "./NoteControl";
+import type { HighlightPen } from "./AppRail";
 import HighlightToolbar from "./HighlightToolbar";
 import GlossaryCard from "../glossary/GlossaryCard";
 import type { GlossaryStore } from "../glossary/store";
-import type { GlossaryRef } from "../glossary/types";
+import type { GlossaryEntry, GlossaryRef } from "../glossary/types";
 import { isGlossaryCandidate, MAX_TERM_WORDS } from "../glossary/textIndex";
 
 type HighlightStyleOverride = Pick<CommentedHighlight, "highlightColor" | "highlightStyle">;
 type HighlightStyle = NonNullable<CommentedHighlight["highlightStyle"]>;
 
 export interface GlossaryTipBindings {
+  onSaveToNotebook?: (entry: GlossaryEntry) => void;
   store: GlossaryStore;
   // Adds the term (or finds it already there) and starts its lookup;
   // returns the entry's id, or null if the selection isn't a usable term.
@@ -29,9 +30,11 @@ interface ExpandableTipProps {
     highlight: GhostHighlight,
     comment: string,
     style?: HighlightStyleOverride,
-  ) => void;
+  ) => string;
+  onOpenNote: (id: string) => void;
+  pen: HighlightPen;
   onDiveDeeper: (highlight: GhostHighlight) => void;
-  onPin: (selectionText: string, pageNumber: number) => void;
+  onPin: (selectionText: string, pageNumber: number, ghost?: GhostHighlight) => void;
   // Text, or an area selection's image, added to the next question.
   onAddToQuestion: (content: GhostHighlight["content"], position: ScaledPosition) => void;
   addToQuestionTitle: () => string; // read when shown: Ask's, or the open dive's
@@ -40,13 +43,15 @@ interface ExpandableTipProps {
 
 export default function ExpandableTip({
   addHighlight,
+  onOpenNote,
+  pen,
   onDiveDeeper,
   onPin,
   onAddToQuestion,
   addToQuestionTitle,
   glossary,
 }: ExpandableTipProps) {
-  const [pendingStyle, setPendingStyle] = useState<HighlightStyle>("highlight");
+  const [pendingStyle, setPendingStyle] = useState<HighlightStyle>(pen.style);
   // Set once "Glossary" is clicked: the tip then shows that entry's
   // definition card in place of the toolbar.
   const [glossaryEntryId, setGlossaryEntryId] = useState<string | null>(null);
@@ -74,19 +79,15 @@ export default function ExpandableTip({
     setTip(null);
   };
 
-  const commentControls = useNoteControl({
-    comment: undefined,
-    onCommit: (comment) => {
-      if (comment.trim())
-        finalize(hasTextSelection ? { highlightStyle: pendingStyle } : undefined, comment.trim());
-    },
-    classPrefix: hasTextSelection ? "TextHighlight" : "AreaHighlight",
-    containerRef: tipRef,
-  });
-
-  useLayoutEffect(() => {
-    updateTipPosition?.();
-  }, [commentControls.showComment, updateTipPosition]);
+  const commentControls = {
+    showComment: false, panel: null,
+    button: <button type="button" className="TextHighlight__comment-button" title="Write a note" onClick={(event) => {
+      event.stopPropagation(); const selection = getCurrentSelection(); if (!selection) return;
+      const id = addHighlight(selection.makeGhostHighlight(), "", { highlightColor: pen.color, highlightStyle: pendingStyle });
+      removeGhostHighlight(); setTip(null); onOpenNote(id);
+    }}>Note</button>,
+  };
+  useLayoutEffect(() => { updateTipPosition?.(); }, [updateTipPosition]);
 
   const handleDive = () => {
     const selection = getCurrentSelection();
@@ -100,7 +101,8 @@ export default function ExpandableTip({
     const selection = getCurrentSelection();
     const text = selection?.content.text;
     if (!text) return;
-    onPin(text, selection.position.boundingRect.pageNumber);
+    onPin(text, selection.position.boundingRect.pageNumber, selection.makeGhostHighlight());
+    removeGhostHighlight(); setTip(null);
   };
 
   const handleAddToQuestion = () => {
@@ -121,6 +123,7 @@ export default function ExpandableTip({
     return (
       <div className="expandable-tip" ref={tipRef}>
         <GlossaryCard
+          onSaveToNotebook={glossary.onSaveToNotebook}
           store={glossary.store}
           entryId={glossaryEntryId}
           onOpenInGlossary={(entryId) => {
@@ -155,6 +158,7 @@ export default function ExpandableTip({
         glossaryDisabledReason={
           isGlossaryCandidate(selectionText) ? undefined : `Select a single term (up to ${MAX_TERM_WORDS} words)`
         }
+        activeColor={pen.color}
         activeStyle={pendingStyle}
         onStyleChange={hasTextSelection ? setPendingStyle : undefined}
         onColorChange={(presetColor) =>

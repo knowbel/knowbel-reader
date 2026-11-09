@@ -1,3 +1,5 @@
+import { useNotebook } from "../notebook/context";
+import { saveGlossaryDefinition } from "../notebook/glossaryCapture";
 import ReactMarkdown, { type Options as MarkdownOptions } from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -122,14 +124,18 @@ function ReferenceSense({ reference }: { reference: GlossaryReference }) {
 // meaning of a foreign word or idiom, the definition as this document uses
 // it, and the matching dictionary/encyclopedia entry.
 export function GlossaryMeaning({
+  onSaveToNotebook,
   entry,
   pageLabel = String,
   onJumpToRef,
 }: {
+  onSaveToNotebook?: (entry: GlossaryEntry) => void;
   entry: GlossaryEntry;
   pageLabel?: (pageNumber: number) => string;
   onJumpToRef?: (ref: GlossaryRef) => void;
 }) {
+  const notebook = useNotebook();
+  const save = onSaveToNotebook ?? (notebook ? (entry: GlossaryEntry) => { void saveGlossaryDefinition(notebook.store, entry); } : undefined);
   return (
     <div className="glossary-meaning">
       {entry.literal ? (
@@ -142,6 +148,7 @@ export function GlossaryMeaning({
         <DefinitionText text={entry.definition} streaming={entry.status === "streaming"} />
       </div>
       {entry.reference ? <ReferenceSense reference={entry.reference} /> : null}
+      {save && entry.status === "done" ? <button type="button" className="glossary-card-link glossary-save-notebook" onClick={() => save(entry)}>Add to notebook</button> : null}
     </div>
   );
 }

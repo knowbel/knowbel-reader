@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { DiveHighlight } from "./types";
-import { useNoteControl } from "../components/NoteControl";
+import { useNotebook } from "../notebook/context";
 import HighlightToolbar from "../components/HighlightToolbar";
 import type { AnchorRect } from "./useFlippedPlacement";
 import FloatingTip from "../components/FloatingTip";
@@ -11,7 +11,7 @@ type HighlightStyle = NonNullable<DiveHighlight["highlightStyle"]>;
 export interface DiveSelectionTipProps {
   selectionText: string;
   anchorRect: AnchorRect;
-  onAddHighlight: (text: string, comment: string, style?: HighlightStyleOverride) => void;
+  onAddHighlight: (text: string, comment: string, style?: HighlightStyleOverride) => string;
   onDiveDeeper: () => void;
   // Set when this text already seeded a dive (a dive marker with no
   // highlight of its own): the Dive button then reopens it.
@@ -39,6 +39,7 @@ export default function DiveSelectionTip({
   onAddToQuestion,
   onClose,
 }: DiveSelectionTipProps) {
+  const notebook = useNotebook();
   const [pendingStyle, setPendingStyle] = useState<HighlightStyle>("highlight");
   const tipRef = useRef<HTMLDivElement>(null);
 
@@ -47,14 +48,11 @@ export default function DiveSelectionTip({
     onClose();
   };
 
-  const commentControls = useNoteControl({
-    comment: undefined,
-    onCommit: (comment) => {
-      if (comment.trim()) finalize({ highlightStyle: pendingStyle }, comment.trim());
-    },
-    classPrefix: "TextHighlight",
-    containerRef: tipRef,
-  });
+  const commentControls = { showComment: false, panel: null, button: <button type="button" className="TextHighlight__comment-button" onClick={() => {
+    const id = onAddHighlight(selectionText, "", { highlightStyle: pendingStyle });
+    const entry = notebook?.store.entryForCapture(`dive:${id}`); if (entry) notebook?.store.reveal(entry.id);
+    onClose();
+  }}>Note</button> };
 
   return (
     <FloatingTip anchorRect={anchorRect} onClose={onClose} deps={[commentControls.showComment]}>

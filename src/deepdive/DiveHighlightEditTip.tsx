@@ -1,3 +1,5 @@
+import { useNotebook } from "../notebook/context";
+import { captureEntryId } from "../notebook/model";
 import { useEffect, useRef } from "react";
 import { HIGHLIGHT_COLOR_PRESETS } from "../highlightColors";
 import type { DiveHighlight } from "./types";
@@ -37,14 +39,15 @@ export default function DiveHighlightEditTip({
 }: DiveHighlightEditTipProps) {
   const tipRef = useRef<HTMLDivElement>(null);
 
-  const commentControls = useNoteControl({
+  const notebook = useNotebook();
+  const fallbackCommentControls = useNoteControl({
     comment: highlight.comment,
     onCommit: (comment) => onEdit({ comment }),
     classPrefix: "TextHighlight",
     containerRef: tipRef,
   });
 
-  const placement = useFlippedPlacement(tipRef, anchorRect, [commentControls.showComment]);
+  const placement = useFlippedPlacement(tipRef, anchorRect, [fallbackCommentControls.showComment]);
 
   useEffect(() => {
     const handleMouseDown = (event: MouseEvent) => {
@@ -65,7 +68,7 @@ export default function DiveHighlightEditTip({
     <div className="dive-selection-tip" style={{ left: placement.left, top: placement.top }} ref={tipRef}>
       <HighlightToolbar
         copyText={highlight.text}
-        note={commentControls}
+        note={notebook ? { panel: null, button: <button type="button" className="TextHighlight__comment-button" onClick={() => notebook.store.reveal(captureEntryId(`dive:${highlight.id}`))}>Note</button> } : fallbackCommentControls}
         divePanelId={highlight.divePanelId}
         onOpenDive={onOpenDive}
         onStartDive={onStartDive}

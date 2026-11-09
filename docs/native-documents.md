@@ -2,7 +2,7 @@
 
 `src/document/` owns the common reader for reflowable formats. Markdown is
 the first adapter. Existing PDFs, converted EPUBs and saved web articles keep
-their PDF rendering and storage; existing annotations need no migration.
+their PDF rendering and source storage. Existing annotations migrate into the shared Notebook on first open.
 
 ## Adding another format
 
@@ -47,7 +47,7 @@ semantic objects, including images with no alt text. No native annotation
 stores viewport rectangles.
 
 Exact anchors are verified against their quotations. Recovery requires one
-unambiguous context match; unresolved notes are retained in the sidebar.
+unambiguous context match; unresolved notes are retained in Notebook.
 The source hash identifies a document. An edited source imports as another
 document; automatic annotation migration between revisions is not implemented.
 
@@ -74,42 +74,41 @@ including follow-ups and nested dives from answers. PDF's multi-pane dive tree
 remains in the PDF reader. Images use the shared image-attachment path only
 when selected for a question; tables already supply canonical searchable text.
 
-## Shared annotations panel
+## Shared Notebook
 
-`components/AnnotationsPanel.tsx` owns the cards, search, type/color/note/location
-filters, document/recent sorting, note editor and Markdown export for both
-readers. `annotations/model.ts` defines its format-neutral rows and section
-boundaries, plus common pin/general-note rows. A row supplies an ordered
-position, display label and edit/delete/navigation callbacks; the panel never
-reads PDF rectangles or native anchors.
+`notebook/NotebookDock.tsx` supplies the same rich notebook for both readers.
+`notebook/model.ts` owns the versioned JSON envelope, source captures, rich
+bodies, sections, deletion records, and AI provenance. Tiptap edits only the
+active entry; saved entries use a small memoized renderer and a shared lazy
+visibility observer. Original excerpts remain separate from editable prose.
 
-`components/PdfAnnotationsPanel.tsx` projects PDF highlights, sticky notes,
-dive highlights and outline chapters into those rows. `document/annotationRows.ts`
-projects native text/object annotations and heading sections; native sticky
-cards display and edit the note's own content. Image/table annotations use area
-cards. Unresolved anchors remain editable in the panel. Native panel edits use
-the existing save/undo path, and new sticky notes open their editor immediately.
-Both readers use the same `AnnotationCard`, Save/Cancel editors, action
-buttons, filters, sort controls, help text and `SidebarFrame` (including the
-collapse control and responsive sizing). Adapters supply data and callbacks,
-with no UI overrides. Hovering a card outlines its source annotation in either
-reader. The Dive badge appears only for annotations with an associated
-conversation and opens that existing dive; new dives start from the selection
-tooltip.
-Location text reflects the document: PDF page labels or native section names.
-Storage formats stay unchanged.
+`NotebookStore` is the canonical owner after migration. It derives native,
+PDF, and dive annotation views without maintaining a second editable comment
+collection. Ordinary writing does not notify the source renderer; sticky
+writing also refreshes its source presentation. Removing a mark keeps its
+capture and writing; deleting an entry moves it to recoverable Trash.
 
-New native format adapters inherit this panel through `NativeReader` without
-adding UI. A reader with a different anchor model can supply its own row
-projection. PDF outline hooks stay in the PDF adapter, and the native panel
-loads on demand without importing the PDF runtime.
+The native reader supplies exact semantic anchors, section labels, object
+snapshots, source jumps, and AI attachments. The PDF reader supplies geometry
+and page labels. New native adapters inherit this notebook through
+`NativeReader`. Image captures save an asset and tables retain a rich semantic
+snapshot. Existing `annotations/model.ts` projections remain pure compatibility
+helpers, with no separate Annotations UI.
+
+Notebook stays mounted beside navigation panels and Deep Dive. Ask uses an
+optional lower area; its drafts and attachments remain scoped to the active
+conversation. Inline question nodes bind streaming to document, entry, and
+exchange identity. Regeneration is a proposal, interrupted jobs require an
+explicit retry, and source citation nodes retain resolved snapshots rather
+than relying on request-local labels such as S1.
 
 ## Storage and performance
 
 Both backends retain original Markdown bytes. Desktop native sources use
 `source.md` (future native HTML/EPUB use their own extensions); old PDF paths
-remain `source.pdf`. `nativeAnnotations` is a per-document data kind included
-in notes backups. Reimporting source content relinks restored notes. Saves
+remain `source.pdf`. `notebook`, `notebookAssets`, and `readerDrafts` are per-document
+data kinds included in notes backups. Legacy collections remain migration input
+and are no longer actively written after migration. Reimporting source content relinks restored notes. Saves
 are debounced, ordered and flushed before switching documents; failures keep
 the native reader open for retry.
 
@@ -132,15 +131,16 @@ blocks keep sidebar updates from rebuilding document content. Browser
 `content-visibility` skips offscreen layout/painting; one intersection observer
 and a passive, animation-frame-throttled caret lookup track reading position.
 Search results and attached passages are bounded. There is no per-word
-geometry polling, OCR, headless conversion, new editor framework or UI kit.
+geometry polling, OCR, or headless conversion. The rich notebook uses Tiptap;
+its editor does not participate in source-document parsing or layout.
 
 ## Verification
 
 `npm test` covers parsing, semantic objects, canonical offsets, Unicode,
 anchors, retrieval, citations, original-byte storage, deduplication, backup
-relinking and save flushing, alongside the existing PDF suite. Shared-panel
-checks cover anchor projections, ordering, section boundaries, unresolved
-locations and pin/note edit routing.
+relinking and save flushing, alongside the existing PDF suite. Notebook checks cover migration, shared mark ownership, acknowledged saves,
+concurrent flushes, recoverable deletion, combining, provenance, assets,
+portable and library backups, and readable HTML/Markdown export.
 
 `npm run test:reader` exercises the browser using Node's built-in WebSocket
 and Chrome's debugging protocol. Start Vite on port 5178 and a headless
@@ -148,13 +148,20 @@ Chrome instance with remote debugging on port 9224. The test creates and
 disposes its own incognito browser context; it does not clear a user's library
 or call live AI providers. `READER_URL` and `CDP_URL` override those endpoints;
 `SCREENSHOT_PATH` optionally saves a screenshot. Chrome is a local test tool,
-not an application dependency.
+not an application dependency. The reader journey includes rich capture and
+inline AI, scoped drafts, source/Notebook persistence, and a 1,000-entry mixed
+notebook alongside a 3,503-block document. It checks lazy rich rendering, one
+active editor, caret restoration, narrow layout, and absence of source DOM
+mutations while writing.
 
 `npm run test:desktop-reader` tests the production bundle directly in macOS
-WKWebView, served through the desktop `tauri://` asset scheme. Run it after
+a WKWebView with inactive scheduling disabled, a test-driven animation frame
+clock, and explicit snapshots (remote macOS hosts may have no display link), served through the desktop `tauri://` asset scheme. Run it after
 `npm run build`. It seeds synthetic library entries, reloads the JavaScript
 runtime before every open, and verifies PDF, converted EPUB, saved web article
-and native Markdown rendering. The PDF checks require a visible canvas, page
+and native Markdown rendering, rich writing, images, equations, and inline AI
+using deterministic mocked responses. Keep the production build fixed throughout
+the check; rebuilding while it runs invalidates the assets under test. The PDF checks require a visible canvas, page
 controls and the restored page's text; the Markdown check also verifies that
 PDF.js stayed unloaded. The test uses a temporary, nonpersistent profile and
 does not read or change the user's library. macOS and its Swift tools are

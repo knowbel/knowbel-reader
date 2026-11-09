@@ -1,3 +1,6 @@
+import { useNotebook } from "../notebook/context";
+import { useReaderDraft } from "../notebook/drafts";
+import { saveNotebookExcerpt } from "../notebook/capture";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import ReactMarkdown, { type Components, type Options as MarkdownOptions } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -85,7 +88,7 @@ export interface DivePanelPaneProps {
     text: string,
     comment: string,
     style?: Pick<DiveHighlight, "highlightColor" | "highlightStyle" | "divePanelId"> & DiveHighlightPlacement,
-  ) => void;
+  ) => string;
   onEditHighlight: (
     highlightId: string,
     edit: Partial<Pick<DiveHighlight, "highlightColor" | "highlightStyle" | "comment" | "divePanelId">>,
@@ -232,6 +235,7 @@ const KATEX_OPTIONS = { throwOnError: false, strict: false };
 function TurnMarkdown({
   content,
   turnIndex,
+  turnId,
   annotate,
   components,
   promoteMath = true,
@@ -241,6 +245,7 @@ function TurnMarkdown({
 }: {
   content: string;
   turnIndex: number;
+  turnId?: string;
   annotate: Omit<AnnotateOptions, "turnIndex">;
   components: Components;
   promoteMath?: boolean;
@@ -255,7 +260,7 @@ function TurnMarkdown({
     [rehypeAnnotate, { ...annotate, turnIndex }],
   ];
   return (
-    <div className="dive-turn-body" data-turn-index={turnIndex}>
+    <div className="dive-turn-body" data-turn-index={turnIndex} data-turn-id={turnId}>
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} components={components}>
         {renderedMarkdown(content, { promoteMath, sources, pageLabel, streaming, turnIndex })}
       </ReactMarkdown>
@@ -328,6 +333,7 @@ function SourceExcerpt({
           <TurnMarkdown
             content={panel.selection}
             turnIndex={0}
+            turnId={panel.turns[0]?.id}
             annotate={annotate}
             components={components}
             promoteMath={false}
@@ -456,7 +462,8 @@ export default function DivePanelPane({
   onPin,
 }: DivePanelPaneProps) {
   const experiments = useExperiments();
-  const [draft, setDraft] = useState("");
+  const notebook = useNotebook();
+  const [draft, setDraft] = useReaderDraft(notebook?.store.drafts, `dive:${panel.id}`);
   const pending = Boolean(job);
   const streamingReply = job?.text ?? "";
   const streamingSources = job?.sources;
@@ -628,7 +635,7 @@ export default function DivePanelPane({
           isOpeningTurn(panel, index) ? (
             <SourceExcerpt key={index} panel={panel} annotate={annotate} components={markdownComponents} />
           ) : (
-            <div key={index} className={`dive-turn dive-turn-${turn.role}`}>
+            <div key={turn.id ?? index} data-turn-id={turn.id} className={`dive-turn dive-turn-${turn.role}`}>
               {isGroundedAnswer(turn) ? (
                 <AnswerBadge grounding={answerGrounding(parseAnswer(turn.content, turn.sources))} />
               ) : null}
@@ -739,12 +746,12 @@ export default function DivePanelPane({
           selectionText={captured.text}
           anchorRect={captured.anchorRect}
           onAddHighlight={(text, comment, style) => {
-            onAddHighlight(panel.id, text, comment, {
+            const id = onAddHighlight(panel.id, text, comment, {
               ...style,
               turnIndex: captured.turnIndex,
               occurrence: captured.occurrence,
             });
-            clear();
+            clear(); return id;
           }}
           onDiveDeeper={() => {
             onNestedDive({
@@ -756,7 +763,7 @@ export default function DivePanelPane({
             });
             clear();
           }}
-          onPin={() => onPin(captured.text, captured.context)}
+          onPin={() => { if (notebook) void saveNotebookExcerpt(notebook.store, captured.markdown ?? captured.text, { context: captured.context, sources: panel.turns[captured.turnIndex ?? 0]?.sources, conversationId: panel.id, turnId: panel.turns[captured.turnIndex ?? 0]?.id }); else onPin(captured.text, captured.context); }}
           onAddToQuestion={() => {
             // The quoted passage a root dive opens with is the document's
             // own text; everything else here is an answer.
@@ -781,7 +788,7 @@ export default function DivePanelPane({
           divePanelId={markerTip.panelId}
           onOpenDive={onOpenDive}
           onDiveDeeper={() => onOpenDive(markerTip.panelId)}
-          onPin={() => onPin(markerTip.text, contextForText(panel, markerTip.text))}
+          onPin={() => { if (notebook) void saveNotebookExcerpt(notebook.store, markerTip.text, { context: contextForText(panel, markerTip.text), sources: panel.baseSources, conversationId: panel.id }); else onPin(markerTip.text, contextForText(panel, markerTip.text)); }}
           onClose={() => setMarkerTip(null)}
         />
       ) : null}

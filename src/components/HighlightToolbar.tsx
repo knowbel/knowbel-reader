@@ -44,145 +44,33 @@ export interface HighlightToolbarProps {
 // the style + color row. It only lays out its contents; each caller
 // positions it (the library's tip container / toolbar group for the PDF,
 // a fixed-position wrapper for dive panels) and wires up what the buttons do.
-export default function HighlightToolbar({
-  classPrefix = "TextHighlight",
-  copyText,
-  note,
-  divePanelId,
-  onOpenDive,
-  onStartDive,
-  onPin,
-  onAddToGlossary,
-  glossaryDisabledReason,
-  onAddToQuestion,
-  addToQuestionTitle,
-  onDelete,
-  activeStyle,
-  onStyleChange,
-  activeColor,
-  onColorChange,
-}: HighlightToolbarProps) {
-  const [copied, setCopied] = useState(false);
-  const [pinned, setPinned] = useState(false);
-  const [added, setAdded] = useState(false);
-
-  const handleCopy = async (event: React.MouseEvent) => {
-    event.stopPropagation();
-    if (!copyText) return;
-    await navigator.clipboard.writeText(copyText);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
-  };
-
-  return (
-    <div className="highlight-toolbar">
-      <div className="highlight-toolbar__row">
-        {copyText ? (
-          <button
-            type="button"
-            className={`${classPrefix}__copy-button`}
-            title={copied ? "Copied" : "Copy text"}
-            onClick={handleCopy}
-          >
-            {copied ? <Check width={14} height={14} strokeWidth={2.5} /> : <Copy width={14} height={14} />}
-          </button>
-        ) : null}
-        {note?.button}
-        {onStartDive ? <DiveControl divePanelId={divePanelId} onOpen={onOpenDive} onStart={onStartDive} /> : null}
-        {onPin ? (
-          <button
-            type="button"
-            className="dive-badge"
-            disabled={pinned}
-            onClick={(event) => {
-              event.stopPropagation();
-              onPin();
-              setPinned(true);
-            }}
-          >
-            {pinned ? "Pinned" : "Pin"}
-          </button>
-        ) : null}
-        {onAddToGlossary ? (
-          <button
-            type="button"
-            className="dive-badge"
-            title={glossaryDisabledReason ?? "Add to glossary"}
-            disabled={Boolean(glossaryDisabledReason)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onAddToGlossary();
-            }}
-          >
-            Glossary
-          </button>
-        ) : null}
-        {onAddToQuestion ? (
-          <button
-            type="button"
-            className="dive-badge add-to-question"
-            title={addToQuestionTitle ?? "Add to your question"}
-            disabled={added}
-            onClick={(event) => {
-              event.stopPropagation();
-              onAddToQuestion();
-              setAdded(true);
-            }}
-          >
-            {added ? <Check width={12} height={12} strokeWidth={2.5} /> : <MessageSquarePlus width={12} height={12} />}
-            {added ? "Added" : "Add to question"}
-          </button>
-        ) : null}
-        {onDelete ? (
-          <button
-            type="button"
-            className={`${classPrefix}__delete-button`}
-            title="Delete"
-            onClick={(event) => {
-              event.stopPropagation();
-              onDelete();
-            }}
-          >
-            <Trash2 width={14} height={14} />
-          </button>
-        ) : null}
-      </div>
-
-      {onColorChange ? (
-      <div className={`highlight-toolbar__colors ${classPrefix}__color-row`} onClick={(event) => event.stopPropagation()}>
-        {onStyleChange ? (
-          <>
-            {STYLE_BUTTONS.map(({ style, title, icon }) => (
-              <button
-                key={style}
-                type="button"
-                className={`TextHighlight__color-row-style ${(activeStyle ?? "highlight") === style ? "active" : ""}`}
-                title={title}
-                onClick={() => onStyleChange(style)}
-              >
-                {icon}
-              </button>
-            ))}
-            <div className="TextHighlight__toolbar-divider" />
-          </>
-        ) : null}
-        {HIGHLIGHT_COLOR_PRESETS.map((presetColor) => (
-          <button
-            key={presetColor}
-            type="button"
-            className={`${classPrefix}__color-row-item`}
-            title={HIGHLIGHT_COLOR_NAMES[presetColor] || presetColor}
-            onClick={() => onColorChange(presetColor)}
-          >
-            <span className={`${classPrefix}__color-row-dot`} style={{ backgroundColor: presetColor }}>
-              {activeColor === presetColor ? <Check width={12} height={12} strokeWidth={3} /> : null}
-            </span>
-          </button>
-        ))}
-      </div>
-      ) : null}
-
-      {note?.panel}
+function rememberPen(change: { color?: string; style?: HighlightStyle }) {
+  try { const previous = JSON.parse(localStorage.getItem("highlight-pen") ?? "null") ?? { color: HIGHLIGHT_COLOR_PRESETS[0], style: "highlight" }; const pen = { ...previous, ...change }; localStorage.setItem("highlight-pen", JSON.stringify(pen)); window.dispatchEvent(new CustomEvent("knowbel-pen-change", { detail: pen })); } catch { /* session pen remains usable */ }
+}
+export default function HighlightToolbar({ classPrefix = "TextHighlight", copyText, note, divePanelId, onOpenDive, onStartDive, onPin, onAddToGlossary, glossaryDisabledReason, onAddToQuestion, addToQuestionTitle, onDelete, activeStyle, onStyleChange, activeColor, onColorChange }: HighlightToolbarProps) {
+  const [more, setMore] = useState(false), [copied, setCopied] = useState(false), [added, setAdded] = useState(false);
+  const color = activeColor ?? HIGHLIGHT_COLOR_PRESETS[0];
+  const chooseColor = (value: string) => { rememberPen({ color: value, ...(activeStyle ? { style: activeStyle } : {}) }); onColorChange?.(value); };
+  return <div className="highlight-toolbar highlight-toolbar--compact">
+    <div className="highlight-toolbar__row">
+      {onColorChange ? <button type="button" className={`${classPrefix}__highlight-button`} title="Highlight selection" onClick={(event) => { event.stopPropagation(); chooseColor(color); }}><span className="capture-color-dot" style={{ background: color }} />Highlight</button> : onPin ? <button type="button" className="dive-badge" onClick={(event) => { event.stopPropagation(); onPin(); }}>Add to notebook</button> : null}
+      {note?.button}
+      {onAddToQuestion ? <button type="button" className="dive-badge add-to-question" title={addToQuestionTitle ?? "Ask about this selection"} disabled={added} onClick={(event) => { event.stopPropagation(); onAddToQuestion(); setAdded(true); }}>{added ? <Check size={12} /> : <MessageSquarePlus size={12} />}{added ? "Added" : "Ask"}</button> : null}
+      <button type="button" className="highlight-toolbar__more-toggle" aria-label="More selection actions" aria-expanded={more} onClick={(event) => { event.stopPropagation(); setMore((value) => !value); }}>•••</button>
     </div>
-  );
+    {more ? <div className="highlight-toolbar__more">
+      <div className="highlight-toolbar__row">
+        {copyText ? <button type="button" className={`${classPrefix}__copy-button`} title={copied ? "Copied" : "Copy text"} onClick={async (event) => { event.stopPropagation(); try { await navigator.clipboard.writeText(copyText); setCopied(true); } catch { /* clipboard can be unavailable in a webview */ } }}>{copied ? <Check size={14} /> : <Copy size={14} />}Copy</button> : null}
+        {onStartDive ? <DiveControl divePanelId={divePanelId} onOpen={onOpenDive} onStart={onStartDive} /> : null}
+        {onPin && onColorChange ? <button type="button" className="dive-badge" onClick={(event) => { event.stopPropagation(); onPin(); }}>Add to notebook</button> : null}
+        {onAddToGlossary ? <button type="button" className="dive-badge" title={glossaryDisabledReason ?? "Add to glossary"} disabled={!!glossaryDisabledReason} onClick={(event) => { event.stopPropagation(); onAddToGlossary(); }}>Glossary</button> : null}
+        {onDelete ? <button type="button" className={`${classPrefix}__delete-button`} title="Remove highlight" onClick={(event) => { event.stopPropagation(); onDelete(); }}><Trash2 size={14} /></button> : null}
+      </div>
+      {onColorChange ? <div className={`highlight-toolbar__colors ${classPrefix}__color-row`}>
+        {onStyleChange ? <>{STYLE_BUTTONS.map(({ style, title, icon }) => <button key={style} type="button" className={`TextHighlight__color-row-style ${(activeStyle ?? "highlight") === style ? "active" : ""}`} title={title} onClick={() => { rememberPen({ style }); onStyleChange(style); }}>{icon}</button>)}<div className="TextHighlight__toolbar-divider" /></> : null}
+        {HIGHLIGHT_COLOR_PRESETS.map((presetColor) => <button key={presetColor} type="button" className={`${classPrefix}__color-row-item`} title={HIGHLIGHT_COLOR_NAMES[presetColor] || presetColor} onClick={() => chooseColor(presetColor)}><span className={`${classPrefix}__color-row-dot`} style={{ backgroundColor: presetColor }}>{color === presetColor ? <Check width={12} height={12} strokeWidth={3} /> : null}</span></button>)}
+      </div> : null}
+    </div> : null}
+    {note?.panel}
+  </div>;
 }

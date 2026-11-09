@@ -69,7 +69,7 @@ and Linux, but those builds haven't been tried yet.
   as you make it, in the color and style you choose.
 - Area highlights (hold **Alt** and drag) and sticky notes (right-click the page).
 - **⌘Z** undoes adding, editing or deleting a highlight or note.
-- Table of contents, full-text search (**⌘F**) and an annotations sidebar.
+- Table of contents and full-text search (**⌘F**). Highlights and notes live together in Notebook.
 - Bottom-center navigation in both readers, shown while scrolling or hovering
   and faded while idle. PDFs offer typed page numbers (printed labels like
   "xii" work); Markdown offers a section picker and previous/next sections.
@@ -79,6 +79,33 @@ and Linux, but those builds haven't been tried yet.
 - Cross-references: "Eq. (3.2)", "Theorem 4.1", "Fig. 7" and "[12]" link to
   their targets, with a preview of the target exactly as the document prints it.
 - Export an annotated copy of the PDF.
+
+### Notebook
+- Keep a resizable notebook beside the document, including while reading a Deep Dive.
+  Highlighting adds the original passage without moving focus. **Note** opens
+  writing linked to that passage; Enter adds a paragraph, **⌘Enter** finishes,
+  and changes save automatically. Removing a highlight keeps its writing and source.
+- Write rich text with headings, lists, links, code, tables, equations, and
+  pasted or uploaded images. Click an equation to edit it. One editor is active
+  at a time; saved notes remain lightweight even in a long notebook.
+- **Ask AI here** inserts a question whose cited answer streams directly into
+  the notebook. Choose this note and its sources or the document as context.
+  Stop, retry, edit the answer, or preview a regenerated answer before replacing it.
+  `/ask` at an empty paragraph is an optional shortcut.
+- Add formatted excerpts from Ask, Deep Dive, summaries, and glossary definitions.
+  Original passages, citations, and conversation links stay attached. AI
+  contributions keep their own origin when combined with personal writing.
+- Organize by source section or named sections; move, reorder, combine notes,
+  or attach several saved passages to one thought. Search and filter by type,
+  color, or nearby location. Deleted notes can be restored from Trash.
+- **Clarify**, **Shorten**, and **Save takeaway** offer proposals to accept or
+  dismiss. Related notes uses local wording and source matches without an AI request.
+- Saved means the latest content was acknowledged by storage. Failed writes
+  keep the current work and offer Retry. Unsent questions and attachments stay
+  with their conversation; notebook position and caret return when reopened.
+- Export Markdown, self-contained HTML, or a complete `.knowbel.zip` notebook
+  with structured JSON, source anchors, and images. Library notes backups include
+  notebooks; older notes are migrated on first open and older backups still import.
 
 ### AI study tools
 - **Deep Dive**: select text or a region of a page and get an explanation

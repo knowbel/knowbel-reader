@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNotebook } from "../notebook/context";
+import { useReaderDraft } from "../notebook/drafts";
+import { saveNotebookExcerpt } from "../notebook/capture";
+import { serializeRichRange } from "../deepdive/selectionText";
 import { History, Pencil, SquarePen, Trash2, X } from "lucide-react";
 import { formatPageLabel } from "../pageLabels";
 import { answerGrounding, citedSources, parseAnswer } from "../grounding/citations";
@@ -82,7 +86,8 @@ export default function AskPanel({
   const threads = useAskThreads(store);
   const thread = openThreadId ? threads.find((t) => t.id === openThreadId) : undefined;
   const pageLabel = useMemo(() => (n: number) => formatPageLabel(pageLabels, n), [pageLabels]);
-  const [draft, setDraft] = useState("");
+  const notebook = useNotebook();
+  const [draft, setDraft] = useReaderDraft(notebook?.store.drafts, `ask:${openThreadId ?? "new-question"}`);
   const [historyOpen, setHistoryOpen] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -123,10 +128,10 @@ export default function AskPanel({
 
   // Selecting text in an answer brings up the same toolbar as in a dive
   // (copy, pin, add to question).
-  const [selection, setSelection] = useState<{ text: string; context: string; anchorRect: AnchorRect; sources: SourceRef[] } | null>(null);
+  const [selection, setSelection] = useState<{ text: string; context: string; anchorRect: AnchorRect; sources: SourceRef[]; turnId?: string } | null>(null);
   const captureSelection = () => {
     const current = window.getSelection();
-    const text = current?.toString().trim() ?? "";
+    const text = current?.rangeCount ? serializeRichRange(current.getRangeAt(0)) : "";
     const node = current?.anchorNode;
     const answer = node && (node instanceof Element ? node : node.parentElement)?.closest(".ask-turn-assistant");
     if (!text || !answer || !current?.rangeCount) {
@@ -137,7 +142,8 @@ export default function AskPanel({
     setSelection({
       text,
       context: answer.textContent ?? text,
-      sources: thread?.turns[[...answer.parentElement!.children].indexOf(answer)]?.sources ?? [],
+      sources: thread?.turns.find((turn) => turn.id === (answer as HTMLElement).dataset.turnId)?.sources ?? [],
+      turnId: (answer as HTMLElement).dataset.turnId,
       anchorRect: { left: rect.left, top: rect.top, bottom: rect.bottom },
     });
   };
@@ -194,7 +200,7 @@ export default function AskPanel({
           <div className="ask-thread">
             {thread.turns.map((turn, index) => (
               <TurnView
-                key={index}
+                key={turn.id ?? index}
                 turn={turn}
                 isLast={index === thread.turns.length - 1}
                 pageLabel={pageLabel}
@@ -219,7 +225,7 @@ export default function AskPanel({
           <HighlightToolbar
             copyText={selection.text}
             onStartDive={onDiveFromAnswer ? () => { onDiveFromAnswer(selection.text, selection.sources); setSelection(null); window.getSelection()?.removeAllRanges(); } : undefined}
-            onPin={() => onPin(selection.text, selection.context)}
+            onPin={() => { if (notebook) void saveNotebookExcerpt(notebook.store, selection.text, { context: selection.context, sources: selection.sources, conversationId: thread?.id, turnId: selection.turnId }); else onPin(selection.text, selection.context); }}
             onAddToQuestion={() => {
               onAddToQuestion("answer", selection.text);
               setSelection(null);
@@ -393,7 +399,7 @@ function TurnView({
   const grounding = answerGrounding(parseAnswer(turn.content, sources));
   const notCovered = grounding === "not-covered";
   return (
-    <div className="ask-turn ask-turn-assistant">
+    <div className="ask-turn ask-turn-assistant" data-turn-id={turn.id}>
       {!streaming ? <AnswerBadge grounding={grounding} /> : null}
       <AnswerMarkdown content={turn.content} sources={sources} pageLabel={pageLabel} onJump={onJump} streaming={streaming} />
       {!streaming ? (
