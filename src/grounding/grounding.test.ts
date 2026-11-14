@@ -264,6 +264,14 @@ test("citedSources lists only sources the answer cited", () => {
 
 // ---- Ask ---------------------------------------------------------------------
 
+function longBook() {
+  const { index, chunks } = book();
+  const padding = Array.from({ length: 400 }, (_, i) =>
+    chunk(`padding-${i}`, i + 5, "Background material on the history of computing and classical circuits. ".repeat(10)),
+  );
+  const all = [...chunks, ...padding];
+  return { index, chunks: all, bm25: buildBm25(all) };
+}
 
 test("wantsWholeScope spots questions about a scope as a whole", () => {
   for (const q of [
@@ -282,7 +290,7 @@ test("wantsWholeScope spots questions about a scope as a whole", () => {
 });
 
 test("a pointed question sends the relevant passages only", () => {
-  const { chunks, bm25 } = book();
+  const { chunks, bm25 } = longBook();
   const { sources, basis } = selectAskSources({ chunks, bm25, question: "What does entanglement link?", scope: { kind: "document" } });
   assert.equal(basis.kind, "passages");
   assert.ok(sources.length >= 1 && sources.length < chunks.length);
@@ -300,11 +308,11 @@ test("a question about the whole scope sends all of it", () => {
   );
 });
 
-test("nothing relevant sends nothing, so the model can be skipped", () => {
-  const { chunks, bm25 } = book();
+test("a search miss sends a bounded overview for the model to assess", () => {
+  const { chunks, bm25 } = longBook();
   const { sources, basis } = selectAskSources({ chunks, bm25, question: "What is photosynthesis?", scope: { kind: "document" } });
-  assert.deepEqual(sources, []);
-  assert.equal(basis.kind, "none");
+  assert.ok(sources.length > 0);
+  assert.equal(basis.kind, "partial");
 });
 
 test("scope limits which passages can be chosen", () => {
@@ -314,9 +322,9 @@ test("scope limits which passages can be chosen", () => {
 });
 
 test("a follow-up searches with the previous question too", () => {
-  const { chunks, bm25 } = book();
+  const { chunks, bm25 } = longBook();
   const alone = selectAskSources({ chunks, bm25, question: "Why?", scope: { kind: "document" } });
-  assert.equal(alone.basis.kind, "none");
+  assert.equal(alone.basis.kind, "partial");
   const followUp = selectAskSources({
     chunks,
     bm25,
@@ -324,8 +332,9 @@ test("a follow-up searches with the previous question too", () => {
     previousQuestion: "What does entanglement link?",
     scope: { kind: "document" },
   });
-  assert.ok(followUp.sources.length > 0);
-  // An unrelated question isn't answered from the previous one's passages.
+  assert.equal(followUp.basis.kind, "passages");
+  assert.ok(followUp.sources.every((source) => /entangle/i.test(source.text)));
+  // An unrelated question gets its own context rather than the prior query.
   const unrelated = selectAskSources({
     chunks,
     bm25,
@@ -333,7 +342,7 @@ test("a follow-up searches with the previous question too", () => {
     previousQuestion: "What does entanglement link?",
     scope: { kind: "document" },
   });
-  assert.equal(unrelated.basis.kind, "none");
+  assert.deepEqual(unrelated, selectAskSources({ chunks, bm25, question: "What is photosynthesis?", scope: { kind: "document" } }));
 });
 
 test("buildAskSystem puts sources first and adds the general-knowledge rule only when asked", () => {
@@ -386,7 +395,7 @@ test("document attachments become sources located on their page; answer text doe
 });
 
 test("attached passages are always sent to Ask, and not duplicated by retrieval", () => {
-  const { index, chunks, bm25 } = book();
+  const { index, chunks, bm25 } = longBook();
   const attached = attachmentSources([makeAttachment("document", "Entanglement links two qubits", 3)!], index);
   const { sources, basis } = selectAskSources({
     chunks,

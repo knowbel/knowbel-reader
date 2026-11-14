@@ -5,9 +5,9 @@ import { GROUNDING_RULES, MATH_RULES, renderSources } from "./prompt.ts";
 import { selectRelevant, type Bm25Index } from "./retrieval.ts";
 import type { SourceRef } from "./types.ts";
 
-// What an Ask question sends the model (roadmap §5.2, §6.2): the passages
-// clearly relevant to it — or the whole chapter/document when the question
-// is about it as a whole — and nothing else.
+// Short papers are read in full. Longer documents use retrieval, with a
+// bounded overview when word overlap alone can't find an answer. A search
+// miss is not evidence that the document doesn't discuss something.
 
 export type AskScope =
   | { kind: "document" }
@@ -19,12 +19,12 @@ export type AskScope =
 export type AskBasis =
   | { kind: "passages"; count: number }
   | { kind: "scope" }
-  | { kind: "partial"; count: number }
+  | { kind: "partial"; count: number; sampled?: boolean }
   | { kind: "none" };
 
-export const ASK_BUDGET = { typicalChars: 4000, ceilingChars: 200_000 };
+export const ASK_BUDGET = { wholeScopeChars: 60_000, overviewChars: 40_000, typicalChars: 8000, ceilingChars: 200_000 };
 // "Search wider": more passages, including less clearly relevant ones.
-export const ASK_WIDER = { typicalChars: 12_000, ceilingChars: 200_000, relativeCutoff: 0.2 };
+export const ASK_WIDER = { typicalChars: 24_000, ceilingChars: 200_000, relativeCutoff: 0.2, minFraction: 0 };
 // When the clearly relevant passages already make up this much of the scope,
 // sending all of it costs little more and reads better.
 const WHOLE_SCOPE_SHARE = 0.6;
@@ -47,7 +47,10 @@ const WHOLE_SCOPE_QUESTION =
   /\b(summari[sz]e|summary|overview|outline|gist|tl;?dr|big picture|main (?:idea|point|argument|claim|theme|takeaway|contribution|result)s?|key (?:idea|point|takeaway|concept|result)s?|what(?:'s| is| are) (?:this|the) (?:chapter|section|paper|document|book|article|text|page)(?:'s)? (?:about|saying|arguing)|what does (?:this|the) (?:chapter|section|paper|document|book|article|text|page) (?:say|cover|argue|discuss)|(?:list|name) (?:all|every|each)|all the (?:theorems|definitions|lemmas|examples|exercises|equations|figures|claims|results|terms)|structure of (?:this|the))\b/i;
 
 export function wantsWholeScope(question: string): boolean {
-  return WHOLE_SCOPE_QUESTION.test(question);
+  return WHOLE_SCOPE_QUESTION.test(question) ||
+    /\b(?:explain|describe|understand|walk me through|tell me about)\s+(?:this|the)\s+(?:paper|article|document|chapter|section|book)\b/i.test(question) ||
+    /\b(?:what|which)\s+(?:problem|question|challenge)s?\s+(?:does|is|are)\s+(?:this|the)\s+(?:paper|article|work|study)\b/i.test(question) ||
+    /\b(?:motivation|contributions?|limitations?|findings?|novelty)\s+(?:of|in|behind)\s+(?:this|the)\s+(?:paper|article|work|study)\b/i.test(question);
 }
 
 // A follow-up that leans on the previous question ("why?", "how does it
@@ -63,6 +66,33 @@ export function isFollowUp(question: string): boolean {
 export interface AskSelection {
   sources: SourceRef[];
   basis: AskBasis;
+  // Lets a bare follow-up keep its previous evidence instead of replacing
+  // it with an overview when neither wording can be found again.
+  retrievalMiss?: boolean;
+}
+
+// Keep the opening, ending, query hits and excerpts spread across a scope.
+// Taking only its first few chunks misses conclusions and later chapters.
+// Whole chunks preserve exact citation offsets; oversized ones are skipped.
+function overviewChunks(scoped: TextChunk[], relevant: TextChunk[]): TextChunk[] {
+  const chosen = new Map<string, TextChunk>();
+  let size = 0;
+  const add = (chunk: TextChunk) => {
+    if (chosen.has(chunk.id) || size + chunk.text.length > ASK_BUDGET.overviewChars) return;
+    chosen.set(chunk.id, chunk);
+    size += chunk.text.length;
+  };
+  scoped.slice(0, 4).forEach(add);
+  scoped.slice(-4).forEach(add);
+  for (const chunk of relevant) {
+    if (size + chunk.text.length > ASK_BUDGET.overviewChars / 2) break;
+    add(chunk);
+  }
+  // Bisect successively so every part gets a chance before filling gaps.
+  for (let divisions = 2; divisions < scoped.length * 2; divisions *= 2) {
+    for (let i = 1; i < divisions; i += 2) add(scoped[Math.floor(i * scoped.length / divisions)]);
+  }
+  return [...chosen.values()];
 }
 
 export function selectAskSources(params: {
@@ -99,7 +129,8 @@ export function selectAskSources(params: {
   if (scoped.length === 0) {
     return attached.length ? { sources: toSources([]), basis: { kind: "passages", count: attached.length } } : { sources: [], basis: { kind: "none" } };
   }
-  if (wantsWholeScope(question) && scopeChars <= ASK_BUDGET.ceilingChars) return whole();
+  if (scopeChars <= ASK_BUDGET.wholeScopeChars ||
+      (wantsWholeScope(question) && scopeChars <= ASK_BUDGET.ceilingChars)) return whole();
 
   // Out of scope, or already sent as an attached passage — excluded before
   // ranking, so an attached passage's own chunk doesn't set the bar for
@@ -110,19 +141,30 @@ export function selectAskSources(params: {
       .map((chunk) => chunk.id),
   );
   const budget = wider ? ASK_WIDER : ASK_BUDGET;
-  const searchText = `${question} ${extraQuery}`.trim();
+  let searchText = `${question} ${extraQuery}`.trim();
   let relevant = selectRelevant(bm25, searchText, { ...budget, exclude: outOfScope });
   if (relevant.length === 0 && previousQuestion && FOLLOW_UP.test(question)) {
-    relevant = selectRelevant(bm25, `${previousQuestion} ${question}`, { ...budget, exclude: outOfScope });
+    searchText = `${previousQuestion} ${searchText}`;
+    relevant = selectRelevant(bm25, searchText, { ...budget, exclude: outOfScope });
+  }
+  // A question can contain vocabulary absent from the text ("mechanism",
+  // "LLMs") alongside the exact concept it discusses ("dreaming"). Don't
+  // let those unmatched words prevent the model from seeing that concept.
+  if (relevant.length === 0 && !wider) {
+    relevant = selectRelevant(bm25, searchText, { ...ASK_WIDER, exclude: outOfScope });
   }
 
   // A whole-scope question over more text than the ceiling allows: the most
   // relevant part of it, said so.
   if (wantsWholeScope(question)) {
-    const list = relevant.length ? relevant.map((r) => r.chunk) : scoped.slice(0, 8);
-    return { sources: toSources(list), basis: { kind: "partial", count: list.length } };
+    const sources = toSources(overviewChunks(scoped, relevant.map((r) => r.chunk)));
+    return { sources, basis: { kind: "partial", count: sources.length, sampled: true } };
   }
-  if (relevant.length === 0 && attached.length === 0) return { sources: [], basis: { kind: "none" } };
+  if (relevant.length === 0 && attached.length === 0) {
+    if (scopeChars <= ASK_BUDGET.ceilingChars) return { ...whole(), retrievalMiss: true };
+    const sources = toSources(overviewChunks(scoped, []));
+    return { sources, basis: { kind: "partial", count: sources.length, sampled: true }, retrievalMiss: true };
+  }
 
   const chosenChars = relevant.reduce((sum, r) => sum + r.chunk.text.length, 0);
   if (relevant.length && chosenChars >= WHOLE_SCOPE_SHARE * scopeChars && scopeChars <= ASK_BUDGET.ceilingChars) return whole();
@@ -145,8 +187,8 @@ export function buildAskSystem(params: {
   const { fileName, scope, basis, sources, generalAllowed, pageLabel, attachmentNote } = params;
   const where = scope.kind === "document" ? "" : ` The reader is asking about ${scopeLabel(scope, pageLabel)}.`;
   const partial =
-    basis.kind === "partial"
-      ? " These are only the most relevant parts of it, not all of it: say so if the question needs the rest."
+    basis.kind === "partial" || basis.kind === "passages"
+      ? " You have selected excerpts, not the complete text. Explain what they support, and say when the rest would be needed; don't claim the whole document lacks an answer."
       : "";
   const general = generalAllowed
     ? "\n- The reader asked for an answer even where the document doesn't cover it: answer from general knowledge there, marking those claims [general]. Don't reply [not-covered]."
@@ -156,14 +198,14 @@ export function buildAskSystem(params: {
   return `You help a reader study a document titled "${fileName}". Answer their question using these passages from it.${where}${partial}
 
 Sources from the document:
-${sources.length ? renderSources(sources, pageLabel) : "(none — no passage of the document addresses this)"}
+${sources.length ? renderSources(sources, pageLabel) : "(no readable document passages available)"}
 
 ${GROUNDING_RULES}${general}
 
+For this question:
+- Interpret the reader's terminology in the context of the document. A concept can be explained even when the reader uses different words from the author.
+- Synthesize an explanation from multiple passages when useful. Answer the supported part of a question even if some details are missing; identify those gaps and mark reasoned connections [inferred: S1] with the actual source id.
+${generalAllowed ? "- Where evidence is missing, use general knowledge as requested, marked [general]." : "- Use [not-covered] only when the supplied evidence cannot support even a partial answer. If you only have excerpts, say you couldn't find an answer in those excerpts rather than asserting the document doesn't cover it."}
+
 ${MATH_RULES}${attachmentNote ? `\n\n${attachmentNote}` : ""}`;
 }
-
-// The reader is told "not covered" without a model call when nothing
-// relevant was found — worded like the model's own [not-covered] reply, so
-// the answer's badge and actions work the same either way.
-export const NOTHING_RELEVANT_ANSWER = "[not-covered] Nothing in this part of the document seems to address that.";

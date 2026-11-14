@@ -110,14 +110,19 @@ and Linux, but those builds haven't been tried yet.
 ### AI study tools
 - **Deep Dive**: select text or a region of a page and get an explanation
   that draws on the surrounding text and related passages elsewhere in the
-  document. Answers stream as they arrive, and can be stopped or retried. Ask
+  document. PDF dives gather up to 15,000 characters of nearby text across
+  page boundaries, favoring the argument leading up to the selection.
+  Answers stream as they arrive, and can be stopped or retried. Ask
   follow-ups or dive deeper into a phrase in an answer to build a tree of nested
   dives; use the map to navigate it and the optional summary to synthesize it.
   If the passages found do not answer a question, you can search more widely or
   ask for general background.
 - **Ask** (**⌘J**): ask questions about the whole document, a chapter, or a
-  page range ("what does section 3.2 prove?"). Only the relevant passages are
-  sent to the model, and you can attach text or page regions to a question.
+  page range ("what does section 3.2 prove?"). Short papers and sections are
+  read in full. Longer documents use relevant passages, automatically widening
+  the search or including excerpts from across the document when needed.
+  Answers show when they use only excerpts. You can attach text or page
+  regions to a question.
 - **Citations**: each answer cites the passages it relies on. Each citation is
   a chip that jumps to the exact spot in the PDF, and claims from outside the
   document are flagged as such.

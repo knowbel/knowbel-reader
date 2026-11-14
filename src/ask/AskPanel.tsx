@@ -57,7 +57,9 @@ function basisText(basis: AskBasis | undefined, scope: AskScope | undefined, pag
   if (!basis) return undefined;
   const where = scope && scope.kind !== "document" ? scopeLabel(scope, pageLabel) : null;
   if (basis.kind === "scope") return where ? `Based on all of ${where}` : "Based on the whole document";
-  if (basis.kind === "partial") return `Based on the most relevant part of ${where ?? "the document"}`;
+  if (basis.kind === "partial") return basis.sampled
+    ? `Based on excerpts from across ${where ?? "the document"}`
+    : `Based on the most relevant part of ${where ?? "the document"}`;
   if (basis.kind === "passages" && where) {
     return `Based on ${basis.count} passage${basis.count === 1 ? "" : "s"} from ${where}`;
   }

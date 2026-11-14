@@ -4,7 +4,7 @@ import { formatSectionPath, sectionPathAt, type Section } from "../text/sections
 import { findPageTargets, sentenceAround, type XrefRef, type XrefTargets } from "../xref/detect.ts";
 import { regionTextRange, type RegionRect } from "./attachments.ts";
 import { linkedSources, LINK_BUDGET, regionCaptionSources, secondHopSources, sourceKey, type LinkTerm } from "./links.ts";
-import { localWindow, regionAnchorRange, statementStarts } from "./localWindow.ts";
+import { localWindow, regionAnchorRange, statementStarts, WINDOW_BUDGET } from "./localWindow.ts";
 import { backMatterPages, diveQuery, diveWeights, sectionRangeAt } from "./priors.ts";
 import { selectRelevant, scoreChunks, type Bm25Index } from "./retrieval.ts";
 import type { SourceRef, SourceVia } from "./types.ts";
@@ -290,7 +290,23 @@ function windowAround(input: DiveSourceInput, pageNumber: number, area: boolean)
   const page = input.index.pages[pageNumber - 1];
   if (!page) return null;
   const pageChunks = input.chunks.filter((chunk) => chunk.pageNumber === pageNumber);
-  const prevPageChunks = input.chunks.filter((chunk) => chunk.pageNumber === pageNumber - 1);
+  if (pageChunks.length === 0) return null;
+  // Collect enough adjacent text to fill the window across page boundaries,
+  // without copying all the preceding/following chunks of a long book.
+  const firstOnPage = input.chunks.indexOf(pageChunks[0]);
+  const afterPage = input.chunks.indexOf(pageChunks[pageChunks.length - 1]) + 1;
+  let first = firstOnPage;
+  let after = afterPage;
+  let beforeChars = 0;
+  let afterChars = 0;
+  while (first > 0 && beforeChars < WINDOW_BUDGET.capChars) {
+    beforeChars += input.chunks[--first].text.length;
+  }
+  while (after < input.chunks.length && afterChars < WINDOW_BUDGET.capChars) {
+    afterChars += input.chunks[after++].text.length;
+  }
+  const prevPageChunks = input.chunks.slice(first, firstOnPage);
+  const nextPageChunks = input.chunks.slice(afterPage, after);
   let range: [number, number] | null = null;
   let regionText: string | undefined;
   if (area && input.region) {
@@ -301,7 +317,7 @@ function windowAround(input: DiveSourceInput, pageNumber: number, area: boolean)
   range ??= locateSelection(input.index, pageNumber, input.selection);
   if (!range) return null;
   const theorems = findPageTargets(page).flatMap((target) => (target.kind === "theorem" && target.range ? [target.range[0]] : []));
-  const chunks = localWindow({ pageChunks, prevPageChunks, range, statementStarts: statementStarts(page, theorems) });
+  const chunks = localWindow({ pageChunks, prevPageChunks, nextPageChunks, range, statementStarts: statementStarts(page, theorems) });
   if (chunks.length === 0) return null;
   const onPage = chunks.filter((chunk) => chunk.pageNumber === pageNumber);
   const span: [number, number] = [onPage[0].start, onPage[onPage.length - 1].end];

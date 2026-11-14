@@ -42,14 +42,29 @@ test("the local window takes more before the selection than after", () => {
   assert.deepEqual(ids, [...ids].sort());
 });
 
-test("at the top of a page the window reaches back into the previous page", () => {
+test("the window reaches into the previous page even when the selection is farther down", () => {
   const prev = pageChunks(4, [words("x", 500), words("y", 500)]);
   const page = pageChunks(5, [words("a", 500), words("b", 500)]);
   const window = localWindow({ pageChunks: page, prevPageChunks: prev, range: [5, 30] });
   assert.ok(window.some((c) => c.id === "p4-1"));
-  // Not at the top: stays on its page.
   const lower = localWindow({ pageChunks: page, prevPageChunks: prev, range: [page[1].start + 5, page[1].start + 30] });
-  assert.ok(lower.every((c) => c.pageNumber === 5));
+  assert.ok(lower.some((c) => c.pageNumber === 4));
+  assert.ok(lower.some((c) => c.id === page[1].id));
+});
+
+test("the larger default window gathers context across preceding and following pages", () => {
+  const prev = [...pageChunks(3, Array.from({ length: 16 }, () => words("before", 500))),
+    ...pageChunks(4, Array.from({ length: 8 }, () => words("before", 500)))];
+  const page = pageChunks(5, Array.from({ length: 6 }, () => words("here", 500)));
+  const next = pageChunks(6, Array.from({ length: 12 }, () => words("after", 500)));
+  const hit = page[2];
+  const window = localWindow({ pageChunks: page, prevPageChunks: prev, nextPageChunks: next, range: [hit.start + 5, hit.start + 30] });
+  const size = window.reduce((sum, c) => sum + c.text.length, 0);
+  assert.ok(size > 12_000 && size <= 15_000, `size ${size}`);
+  assert.ok(window.some((c) => c.pageNumber === 3));
+  assert.ok(window.some((c) => c.pageNumber === 6));
+  assert.ok(window.includes(hit));
+  assert.ok(window.indexOf(hit) > window.length - window.indexOf(hit) - 1);
 });
 
 test("an opening 'Therefore' pulls in the chunk before; a closing 'as follows:' the one after", () => {
@@ -65,12 +80,12 @@ test("an opening 'Therefore' pulls in the chunk before; a closing 'as follows:' 
 });
 
 test("the cap holds even when every chunk asks for a neighbor", () => {
-  const page = pageChunks(1, Array.from({ length: 8 }, () => `Therefore ${words("t", 590)} as follows:`));
-  const hit = page[4];
+  const page = pageChunks(1, Array.from({ length: 60 }, () => `Therefore ${words("t", 590)} as follows:`));
+  const hit = page[30];
   const window = localWindow({ pageChunks: page, prevPageChunks: [], range: [hit.start + 2, hit.start + 20] });
   const size = window.reduce((sum, c) => sum + c.text.length, 0);
-  assert.ok(size <= 3500, `size ${size}`);
-  assert.ok(window.some((c) => c.id === "p1-4"));
+  assert.ok(size > 12_000 && size <= 15_000, `size ${size}`);
+  assert.ok(window.includes(hit));
 });
 
 test("a selection inside a proof extends back to where the proof starts", () => {
@@ -231,6 +246,27 @@ test("references in answer text resolve against the document's targets", () => {
 });
 
 // ---- Strategies through buildDiveSources ----------------------------------------
+
+test("PDF Dive sends the larger local window with exact citation offsets across pages", () => {
+  const selection = "Chosen argument at the center of this page.";
+  const pages = Array.from({ length: 12 }, (_, i) => page(i + 1,
+    Array.from({ length: 6 }, (_, j) => words(i === 4 && j === 2 ? selection : `Passage ${i + 1}.${j + 1}`, 600)),
+  ));
+  const index = buildTextIndex(pages);
+  const chunks = chunkDocument(index);
+  const sources = buildDiveSources({ index, chunks, bm25: buildBm25(chunks), selection, pageNumber: 5 }, undefined, { localWindow: true });
+  const local = sources.filter((source) => source.via === "local");
+  const size = local.reduce((sum, source) => sum + source.text.length, 0);
+  assert.ok(size > 12_000 && size <= 15_000, `local text size ${size}`);
+  assert.ok(local.some((source) => source.pageNumber <= 3));
+  assert.ok(local.some((source) => source.pageNumber >= 6));
+  assert.ok(local.some((source) => source.text.includes(selection)));
+  assert.equal(new Set(local.map((source) => source.chunkId)).size, local.length);
+  for (const source of sources) {
+    assert.equal(index.pages[source.pageNumber - 1].text.slice(source.start, source.end), source.text);
+  }
+  assert.deepEqual(sources.map((source) => source.label), sources.map((_, i) => `S${i + 1}`));
+});
 
 test("with no strategy, dive sources are chosen exactly as before", () => {
   const { index, chunks, bm25, targets, refsByPage } = linkedBook();

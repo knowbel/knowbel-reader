@@ -3,9 +3,9 @@ import type { TextChunk } from "../text/chunks.ts";
 import type { RegionRect } from "./attachments.ts";
 
 // The text around a dive's selection that a reader would reread to
-// understand it: more of what leads up to it than what follows, the tail of
-// the previous page when the selection sits at the top of one, the start of
-// the proof or theorem it's inside, and a neighbor whenever the window opens
+// understand it: more of what leads up to it than what follows, nearby
+// pages when the context crosses a page boundary, the start of the proof
+// or theorem it's inside, and a neighbor whenever the window opens
 // or closes mid-argument ("Therefore…", "…as follows:"). Pure; used only by
 // the localWindow and areaContext dive experiments (context.ts).
 
@@ -15,7 +15,8 @@ export interface WindowBudget {
   capChars: number; // the whole window, continuation and statement start included
 }
 
-export const WINDOW_BUDGET: WindowBudget = { beforeChars: 1500, afterChars: 600, capChars: 3500 };
+// Leave room for the selection itself and extensions to complete an argument.
+export const WINDOW_BUDGET: WindowBudget = { beforeChars: 10_000, afterChars: 4000, capChars: 15_000 };
 
 // A chunk opening like this continues the one before it.
 const CONTINUES_BACK =
@@ -37,29 +38,26 @@ export function statementStarts(page: IndexedPage, theoremStarts: number[]): num
 
 export function localWindow(params: {
   pageChunks: TextChunk[]; // the selection's page, in order
-  prevPageChunks: TextChunk[]; // the page before it, in order
+  prevPageChunks: TextChunk[]; // preceding chunks across nearby pages, in order
+  nextPageChunks?: TextChunk[]; // following chunks across nearby pages, in order
   range: [number, number]; // the selection, in its page's text
   statementStarts?: number[]; // see statementStarts()
   budget?: WindowBudget;
 }): TextChunk[] {
-  const { pageChunks, prevPageChunks, range, budget = WINDOW_BUDGET } = params;
+  const { pageChunks, prevPageChunks, nextPageChunks = [], range, budget = WINDOW_BUDGET } = params;
   const [start, end] = range;
   const hits = pageChunks.filter((chunk) => chunk.start < end && start < chunk.end);
   if (hits.length === 0) return [];
-  // The document's chunks around the page, in reading order, so "before"
-  // can run on into the previous page.
-  const sequence = [...prevPageChunks, ...pageChunks];
+  // Page boundaries don't interrupt the argument the reader is studying.
+  const sequence = [...prevPageChunks, ...pageChunks, ...nextPageChunks];
   let first = sequence.indexOf(hits[0]);
   let last = sequence.indexOf(hits[hits.length - 1]);
   const firstOnPage = prevPageChunks.length;
 
-  // Before: nearest first, within the page — then the previous page's tail
-  // only when the selection's own chunk opens the page.
+  // Before: nearest first, continuing across earlier pages as needed.
   let before = 0;
   while (first - 1 >= 0) {
     const candidate = sequence[first - 1];
-    const crossesPage = first - 1 < firstOnPage;
-    if (crossesPage && hits[0] !== pageChunks[0]) break;
     if (before + candidate.text.length > budget.beforeChars) break;
     before += candidate.text.length;
     first -= 1;

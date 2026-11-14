@@ -2,7 +2,6 @@ import { streamAskReply, streamDiveReply } from "../deepdive/api";
 import {
   buildAskSystem,
   isFollowUp,
-  NOTHING_RELEVANT_ANSWER,
   selectAskSources,
   type AskBasis,
   type AskScope,
@@ -22,8 +21,8 @@ import type { AskStore } from "./store";
 import type { AskThread, AskTurn } from "./types";
 
 // Answering one question in a thread: choose the passages (grounding/ask.ts),
-// skip the model when none are relevant, otherwise stream the answer into the
-// store. Runs outside React (see store.ts).
+// then stream an answer into the store. Search misses still get document
+// context; unreadable text is reported separately. Runs outside React.
 
 export interface AskContext {
   pdfDocument: TextDocument; // legacy name; accepts any document's text provider
@@ -112,8 +111,10 @@ async function chooseSources(
   attachments: Attachment[],
 ): Promise<{ sources: SourceRef[]; basis: AskBasis; carried?: Attachment[] }> {
   const previous = lastAnswer(thread.turns);
+  const carried = attachments.length === 0 && isFollowUp(question) && sameScope(scope, previous?.scope ?? DOCUMENT)
+    ? previousRegions(thread.turns) : [];
   if (options.reuseSources && previous?.sources) {
-    return { sources: previous.sources, basis: previous.basis ?? { kind: "passages", count: previous.sources.length } };
+    return { sources: previous.sources, basis: previous.basis ?? { kind: "passages", count: previous.sources.length }, carried };
   }
   if (
     !options.retry &&
@@ -122,7 +123,7 @@ async function chooseSources(
     previous.sources &&
     sameScope(scope, previous.scope ?? DOCUMENT)
   ) {
-    return { sources: previous.sources, basis: previous.basis };
+    return { sources: previous.sources, basis: previous.basis, carried };
   }
   const [index, chunks, bm25] = await Promise.all([
     getTextIndex(context.pdfDocument),
@@ -145,18 +146,18 @@ async function chooseSources(
   // (a passage found by its wording, an attached region): answered from what
   // that answer had — its passages, and the regions its question sent —
   // rather than "not covered".
-  const carried = attachments.length === 0 ? previousRegions(thread.turns) : [];
   if (
-    selection.sources.length === 0 &&
+    (selection.sources.length === 0 || selection.retrievalMiss) &&
     !options.retry &&
     previous &&
+    sameScope(scope, previous.scope ?? DOCUMENT) &&
     (previous.sources?.length || carried.length) &&
     isFollowUp(question)
   ) {
     const sources = previous.sources ?? [];
     return { sources, basis: previous.basis ?? { kind: "passages", count: sources.length }, carried };
   }
-  return selection;
+  return { ...selection, carried };
 }
 
 export async function ask(
@@ -185,7 +186,7 @@ export async function ask(
   }
   const before = store.get(threadId)!;
   const generalAllowed = options.retry?.generalAllowed ?? false;
-  const scopeAtAsk = await scopeFor(asked, thread, context, Boolean(options.retry));
+  const scopeAtAsk = await scopeFor(asked, thread, context, Boolean(options.retry || options.reuseSources));
 
   let sources: SourceRef[];
   let basis: AskBasis;
@@ -197,9 +198,15 @@ export async function ask(
     let carried: Attachment[] | undefined;
     ({ sources, basis, carried } = await chooseSources(before, asked, scopeAtAsk, context, options, attachments));
     if (carried?.length) sent = [...attachments, ...carried];
-  } catch {
-    sources = [];
-    basis = { kind: "none" };
+  } catch (error) {
+    if (context.signal?.aborted) return;
+    const detail = error instanceof Error ? ` ${error.message}` : "";
+    store.update(threadId, (t) => ({
+      ...t,
+      turns: [...t.turns, { role: "assistant", content: `⚠️ Couldn't read the document text. Please retry.${detail}`, status: "error", at: now() }],
+      updatedAt: now(),
+    }));
+    return;
   }
   if (isTextProvider(context.pdfDocument)) {
     const provider = context.pdfDocument;
@@ -217,12 +224,11 @@ export async function ask(
     ...(generalAllowed ? { generalAllowed: true } : {}),
   };
 
-  // Nothing relevant: say so at no cost; the reader can widen or allow
-  // general knowledge from there.
+  // No readable text is different from a paper not covering the question.
   if (sources.length === 0 && sent.length === 0 && !generalAllowed) {
     store.update(threadId, (t) => ({
       ...t,
-      turns: [...t.turns, { role: "assistant", content: NOTHING_RELEVANT_ANSWER, at: now(), ...answerMeta }],
+      turns: [...t.turns, { role: "assistant", content: "⚠️ No readable text was found in this part of the document.", status: "error", at: now(), ...answerMeta }],
       updatedAt: now(),
     }));
     return;
