@@ -41,7 +41,7 @@ The normal desktop arrangement is a reading surface with Notebook alongside it:
 │      │                                 │                               │
 │      │                                 │ ── Ask about this passage ─── │
 │      │                                 │ A short explanation…          │
-│      │                                 │ Save excerpt · Save takeaway │
+│      │                                 │ Save excerpt                 │
 └──────┴─────────────────────────────────┴───────────────────────────────┘
 ```
 
@@ -86,7 +86,6 @@ Track the section currently being read with a quiet location chip. Clicking it r
 | Select a region or figure → Save | Save its image and available text with a source link. | Same capture behavior as text. |
 | Click + Note | Create an entry in the chosen notebook section. | Start writing immediately; a title is optional. |
 | Select AI text → Add to notebook | Save the formatted fragment with its origin and citations. | Keep the answer in place. Show a quiet Added message with Show and Undo. |
-| AI answer → Save takeaway | Generate a short editable proposal with source links. | Preview before insertion. |
 | Existing excerpt → Write a note | Continue writing in that entry. | Do not create another capture. |
 | Source tooltip → Remove highlight | Hide the visible mark. | Retain the source snapshot, written note, and conversation. |
 
@@ -107,7 +106,7 @@ Use one shared editing behavior across Notebook, source tooltips, and sticky not
 - Enter creates a paragraph or line; the editor handles lists and code normally.
 - The finish shortcut commits a recovery checkpoint and returns focus appropriately.
 - Escape dismisses a transient editor without discarding what was typed. Undo reverses edits; an explicit Discard draft action is available when needed.
-- Clicking elsewhere preserves the draft. Changing a color, source, or AI action cannot commit an outdated editor value.
+- Clicking outside a note or moving keyboard focus away finishes editing and immediately saves the latest content; no Done button is needed. Formatting controls, insertion forms, and inline AI controls within the note keep editing active. Changing a color, source, or AI action cannot commit an outdated editor value.
 - Respect IME composition and preserve caret/selection when an unrelated capture arrives.
 - Keep drafts scoped to document, entry, conversation, and new-question context. Switching threads must not move an unsent question into another thread.
 
@@ -144,7 +143,6 @@ The useful intelligence is contextual: Knowbel knows what was saved, where it ca
 | Feature | Trigger | Result |
 | --- | --- | --- |
 | Ask AI here | Insert an AI question block using an insertion menu, optional slash command, or keyboard action. | Type a question in the document and explicitly run it; its rich, cited answer streams directly below the question. |
-| Save takeaway | An answer or dive-summary action. | An editable, cited draft capturing the useful point. The exact-answer excerpt is also available as a direct save. |
 | Clarify / Shorten | Select the reader's writing and open its contextual menu. | A proposed replacement beside the original, with Replace, Insert below, and Dismiss. |
 | Ask about this note | An entry action or selected text. | An attached question containing chosen writing and its source captures, with the scope visible. |
 | Related notes | An entry action. | A few existing notes relevant to its sources and wording, with explanations such as Same equation or Same passage. |
@@ -157,7 +155,7 @@ Keep active jobs separate from serialized document content. Address updates by e
 
 Source facts, reader assertions, and earlier AI text must remain distinguishable in model context. Existing reader writing is context, not documentary evidence. Grounded answers cite original passages; references to a notebook entry are labeled as references to the reader's notes. Expose which entries and passages were used in the Ask area.
 
-Keep provenance on the relevant saved block, rather than labeling an entire mixed note as AI-authored. A quiet AI-assisted label opens its original answer, sources, and generation details. Editing a block retains its origin while recording that the reader changed it. Verbatim AI excerpts, generated takeaways, and the reader's own text stay distinguishable.
+Keep provenance on the relevant saved block, rather than labeling an entire mixed note as AI-authored. A quiet AI-assisted label opens its original answer, sources, and generation details. Editing a block retains its origin while recording that the reader changed it. Verbatim AI excerpts and the reader's own text stay distinguishable.
 
 AI tools cannot silently rewrite a note, move entries, merge duplicates, or strengthen the claim that a source supports. Preserve cancellation, retry, and the original writing. Bind proposals to the originating document, entry, selection, and content revision. If writing changes while a proposal is generated, retain the proposal for explicit insertion and prevent stale replacement.
 
@@ -238,7 +236,7 @@ Each phase ends with a reviewable behavior, and later phases depend on the prece
 | 3. Notebook reading surface | Right dock, compact excerpts, active entry editor, section organization, search/filters, source previews, keyboard access, move/combine, Trash, responsive layout. | A reader can keep Notebook open, write continuously, and navigate between notes and sources. |
 | 4. Capture integration | Simplified toolbar, linked inline note editor, exact deduplication, figures/regions, answer fragments, shared sticky editing, Add to notebook in place of Pin. | Every supported capture path creates useful, correctly attributed notebook content without disrupting reading. |
 | 5. Inline AI and persistent workspace | Inline question/answer nodes, scoped context, streaming/cancel/retry/recovery, optional Ask lower area, existing conversation history, notebook available in Deep Dive, citation/return navigation. | Ask a question inside a note, read and edit its answer there, and continue writing or reading without leaving the notebook. |
-| 6. Contextual AI writing tools | Save takeaway, Clarify/Shorten previews, Ask about note with sources, local related-note suggestions, cancellation/stale-proposal handling. | AI helps develop selected material and changes writing only through explicit insertion/replacement. |
+| 6. Contextual AI writing tools | Clarify/Shorten previews, Ask about note with sources, local related-note suggestions, cancellation/stale-proposal handling. | AI helps develop selected material and changes writing only through explicit insertion/replacement. |
 | 7. Polish and cutover | Migration/backup round trips, large-notebook performance, WebKit/browser accessibility checks, updated README/docs, removal of the redundant Annotations UI. | Notebook is the sole shipped annotation/notes surface, with parity across PDF and Markdown. |
 
 Primary implementation areas:

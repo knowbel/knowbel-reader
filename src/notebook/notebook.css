@@ -72,9 +72,6 @@
 .nb-rich-editor { min-height:50px; outline:none; padding:1px 1px 10px; }
 .nb-rich-editor .ProseMirror-selectednode { outline:2px solid var(--link); outline-offset:2px; }
 .nb-rich-editor p.is-editor-empty:first-child:before { content:attr(data-placeholder); color:var(--muted); float:left; height:0; pointer-events:none; }
-.nb-editor-footer { display:flex; align-items:center; gap:8px; font-size:10px; color:var(--muted); padding-top:8px; }
-.nb-editor-footer span { flex:1; }
-.nb-editor-footer button { padding:4px 8px; border:1px solid var(--border); font-size:11px; }
 .nb-insert-form { display:flex; flex-wrap:wrap; gap:5px; padding:8px; }
 .nb-insert-form input { flex:1; min-width:130px; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:6px; }
 .nb-insert-form button { font-size:11px; padding:5px; }
@@ -115,8 +112,8 @@
 .nb-ai-origin { margin-left:auto; color:var(--muted); font-size:9px; }
 .nb-ai-status,.nb-ai-error { color:var(--muted); font-size:11px; line-height:1.5; }
 .nb-ai-error { color:var(--danger,#c76a58); }
-.nb-writing-actions,.nb-entry-ai-actions { display:flex; gap:5px; font-size:10px; color:var(--muted); padding-top:7px; }
-.nb-writing-actions button,.nb-entry-ai-actions button { font-size:10px; padding:3px 6px; }
+.nb-writing-actions { display:flex; gap:5px; font-size:10px; color:var(--muted); padding-top:7px; }
+.nb-writing-actions button { font-size:10px; padding:3px 6px; }
 .nb-proposal { border:1px solid var(--border-strong); padding:10px; margin:10px 0; border-radius:5px; font-size:12px; line-height:1.6; }
 .nb-proposal button { font-size:11px; padding:5px 7px; margin:5px 4px 0 0; border:1px solid var(--border); }
 .nb-eyebrow { color:var(--muted); font-size:10px; }

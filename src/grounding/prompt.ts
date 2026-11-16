@@ -1,8 +1,7 @@
 import type { SourceRef } from "./types.ts";
 
-// The sources block and the shared answering rules every grounded surface
-// puts in its system prompt. Kept compact: this text is paid for on every
-// request.
+// The sources block and evidence rules shared by grounded answers. Reply
+// style stays separate so Ask and Deep Dive can choose their own depth.
 
 export function renderSources(sources: SourceRef[], pageLabel: (pageNumber: number) => string): string {
   return sources
@@ -17,12 +16,15 @@ export function renderSources(sources: SourceRef[], pageLabel: (pageNumber: numb
     .join("\n");
 }
 
-export const GROUNDING_RULES = `How to answer:
-- Answer first, in one to three plain sentences. Add short steps or bullets only if the question truly needs them. Stay under about 120 words unless the reader asks for more. No preamble, no recap, don't restate the question.
-- After each claim taken from a source, cite it by id: [S2] (several: [S2][S5]). For something you reasoned from the sources rather than read there: [inferred: S2]. For anything from outside the sources: [general].
+export const SOURCE_RULES = `- After each claim taken from a source, cite it by id: [S2] (several: [S2][S5]). For something you reasoned from the sources rather than read there: [inferred: S2]. For anything from outside the sources: [general].
 - Quote the document only word for word, in quotation marks, followed by its citation — prose only; never quote a formula (write it in LaTeX instead).
 - Never cite an id that isn't listed above.
 - If the sources don't address the question at all, reply only "[not-covered]" and one sentence saying so.`;
+
+// Deep Dive's default answer style; Ask supplies its own style with SOURCE_RULES.
+export const GROUNDING_RULES = `How to answer:
+- Answer first, in one to three plain sentences. Add short steps or bullets only if the question truly needs them. Stay under about 120 words unless the reader asks for more. No preamble, no recap, don't restate the question.
+${SOURCE_RULES}`;
 
 // How answers write math — every grounded surface (Deep Dive, Ask) uses it,
 // so equations render the same everywhere. The sources are text extracted

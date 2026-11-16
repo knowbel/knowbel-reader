@@ -234,7 +234,7 @@ export default function AskPanel({
               window.getSelection()?.removeAllRanges();
               composerRef.current?.focus();
             }}
-            addToQuestionTitle="Add to your next question"
+            addToQuestionTitle="Ask about this selection in a new thread"
           />
         </FloatingTip>
       ) : null}

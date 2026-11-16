@@ -94,7 +94,7 @@ import {
 } from "./grounding/attachments";
 import type { SendOptions } from "./deepdive/DivePanelPane";
 import { AskStore } from "./ask/store";
-import type { AskContext } from "./ask/job";
+import { newThread, type AskContext } from "./ask/job";
 import type { AskThread } from "./ask/types";
 import PageNavigator from "./navigation/PageNavigator";
 import { NavigationHistory, placeFromScroll, scrollTopForPlace, type ReadingPlace } from "./navigation/history";
@@ -1108,7 +1108,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   };
 
   // "Add to question" from any selection: into the dive being read when in
-  // Deep Dive, otherwise into the Ask panel (opening it). Reads the current
+  // Deep Dive, otherwise into a fresh Ask thread (opening it). Reads the current
   // mode through refs — the PDF's selection tip is rendered once per
   // selection and would otherwise act on a stale one.
   const pushAttachment = useCallback((attachment: Attachment, divePanelId?: string) => {
@@ -1117,10 +1117,13 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         setDiveAttachments((all) => ({ ...all, [targetDive]: addAttachment(all[targetDive] ?? [], attachment) }));
         return;
       }
-      setAskAttachments((list) => addAttachment(list, attachment));
+      const thread = newThread(attachment.text || "Selected image");
+      notebook.drafts?.setAttachments(`ask:${thread.id}`, [attachment]);
+      askStore.add(thread);
+      setOpenAskThreadId(thread.id);
       setActiveSidebarPanel("ask");
       setAskFocusRequest((value) => value + 1);
-    }, [setAskAttachments, setDiveAttachments]);
+    }, [askStore, notebook, setDiveAttachments]);
 
   const addToQuestion = useCallback(
     (kind: Attachment["kind"], text: string, pageNumber?: number, divePanelId?: string) => {
@@ -1799,7 +1802,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     onAddToQuestion: (content: GhostHighlight["content"], position: ScaledPosition) =>
       void addPdfContentToQuestion(content, position),
     addToQuestionTitle: () =>
-      diveFocusIdRef.current ? "Add to this dive's next question" : "Add to your next question (Ask panel)",
+      diveFocusIdRef.current ? "Add to this dive's next question" : "Ask about this selection in a new thread",
     glossary: glossaryBindings,
     xref: {
       pageLabel: pageLabelFor,

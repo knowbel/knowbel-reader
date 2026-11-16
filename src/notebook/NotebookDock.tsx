@@ -2,12 +2,10 @@ import { createContext, memo, useCallback, useContext, useDeferredValue, useEffe
 import { ArrowDown, ArrowUp, BookOpen, Check, Copy, MoreHorizontal, Plus, Search, Sparkles, Trash2, Undo2, X } from "lucide-react";
 import { useNotebook } from "./context";
 import type { NotebookCapture, NotebookEntry, NotebookSection } from "./model";
-import { aiContribution, emptyBody, hasRichContent, newExchange } from "./model";
+import { emptyBody, hasRichContent, newExchange } from "./model";
 import RichEditor, { RichContent } from "./RichEditor";
 import { entryMarkdown, notebookMarkdown, exportNotebook, readNotebookBundle } from "./export";
 import { showNotice } from "../components/notices";
-import { writingProposal } from "./ai";
-import { parseRichMarkdown } from "./codec";
 import AnswerMarkdown from "../grounding/AnswerMarkdown";
 import { notebookView, rememberNotebookView } from "./view";
 import "./notebook.css";
@@ -38,9 +36,32 @@ const SourceExcerpt = memo(function SourceExcerpt({ capture, previewOnly = false
 const Entry = memo(function Entry({ entry, active, onActivate, onFinish, selecting, selected, onSelect, trash }: { entry: NotebookEntry; active: boolean; onActivate: (id: string) => void; onFinish: () => void; selecting: boolean; selected: boolean; onSelect: (id: string) => void; trash: boolean }) {
   const bindings = useNotebook()!, store = bindings.store;
   const [related, setRelated] = useState(false), [menuOpen, setMenuOpen] = useState(false);
-  const [takeaway, setTakeaway] = useState<string | null>(null), [busy, setBusy] = useState(false);
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  const entryRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!active || trash) return;
+    let pointerDown = false;
+    const startPointer = () => { pointerDown = true; };
+    const endPointer = () => { pointerDown = false; };
+    const finishOutside = (event: Event) => {
+      if (event.type === 'focusin' && pointerDown) return;
+      if (event.target instanceof Node && !entryRef.current?.contains(event.target)) onFinish();
+    };
+    // Include non-focusable surfaces, while keeping every control within the
+    // note in the editor. Wait for the click so collapsing this note cannot
+    // shift another note or control out from under the pointer.
+    document.addEventListener('pointerdown', startPointer, true);
+    document.addEventListener('pointerup', endPointer, true);
+    document.addEventListener('pointercancel', endPointer, true);
+    document.addEventListener('click', finishOutside, true);
+    document.addEventListener('focusin', finishOutside, true);
+    return () => {
+      document.removeEventListener('pointerdown', startPointer, true);
+      document.removeEventListener('pointerup', endPointer, true);
+      document.removeEventListener('pointercancel', endPointer, true);
+      document.removeEventListener('click', finishOutside, true);
+      document.removeEventListener('focusin', finishOutside, true);
+    };
+  }, [active, trash, onFinish]);
   const captures = entry.captureIds.flatMap((id) => { const capture = store.getCapture(id); return capture ? [capture] : []; });
   const written = hasRichContent(entry.body);
   const relevant = related ? store.getSnapshot().entries.filter((other) => other.id !== entry.id && !other.deletedAt).map((other) => {
@@ -49,7 +70,7 @@ const Entry = memo(function Entry({ entry, active, onActivate, onFinish, selecti
     const words = new Set(store.plain(other).toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []);
     return { other, shared, score: shared * 20 + [...terms].filter((word) => words.has(word)).length };
   }).filter((item) => item.score > 1).sort((a, b) => b.score - a.score).slice(0, 3) : [];
-  return <article className={`nb-entry${active ? " is-editing" : ""}${selected ? " is-selected" : ""}`} data-entry-id={entry.id} tabIndex={0} onKeyDown={(event) => {
+  return <article ref={entryRef} className={`nb-entry${active ? " is-editing" : ""}${selected ? " is-selected" : ""}`} data-entry-id={entry.id} tabIndex={0} onKeyDown={(event) => {
     if (event.target !== event.currentTarget) return;
     if (event.key === "Enter" && !trash) { event.preventDefault(); onActivate(entry.id); }
   }}>
@@ -75,11 +96,6 @@ const Entry = memo(function Entry({ entry, active, onActivate, onFinish, selecti
     {active && !trash ? <RichEditor entryId={entry.id} body={entry.body} onChange={(body) => store.updateBody(entry.id, body)} autoFocus onFinish={onFinish} /> : written ? <div className="nb-entry-writing" onClick={(event) => {
       if (trash || (event.target as HTMLElement).closest("button,a,textarea,input,select,.nb-ai-exchange") || !window.getSelection()?.isCollapsed) return; onActivate(entry.id);
     }}><RichContent node={entry.body} entryId={entry.id} /></div> : !trash ? <button type="button" className="nb-write-here" onClick={() => onActivate(entry.id)}>Write a note…</button> : null}
-    {entry.origin && !trash ? <div className="nb-entry-ai-actions"><button type="button" disabled={busy} onClick={async () => {
-      const job = new AbortController(); controller.current?.abort(); controller.current = job; setBusy(true);
-      try { const text = await writingProposal(captures.map((capture) => capture.text).join('\n') || store.plain(entry), "takeaway", entry.origin?.sources ?? [], job.signal); if (!job.signal.aborted) setTakeaway(text); } catch (error) { if (!job.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't make a takeaway."); } finally { setBusy(false); }
-    }}>{busy ? "Preparing takeaway…" : "Save takeaway"}</button>{busy ? <button type="button" onClick={() => controller.current?.abort()}>Stop</button> : null}</div> : null}
-    {takeaway ? <div className="nb-proposal"><AnswerMarkdown content={takeaway} sources={entry.origin?.sources ?? []} pageLabel={bindings.pageLabel} onJump={bindings.onJumpToSource} /><button type="button" onClick={() => { const latest = store.getEntry(entry.id); if (latest) store.updateBody(entry.id, { ...latest.body, content: [...(latest.body.content ?? []), aiContribution(parseRichMarkdown(takeaway, entry.origin?.sources), { kind: "ai", context: "Generated takeaway", sources: entry.origin?.sources ?? [] })] }); setTakeaway(null); }}>Add below</button><button type="button" onClick={() => setTakeaway(null)}>Dismiss</button></div> : null}
     {related ? <div className="nb-related"><span className="nb-eyebrow">Related notes</span>{relevant.length ? relevant.map(({ other, shared }) => <button type="button" key={other.id} onClick={() => store.reveal(other.id)}><span>{store.plain(other).slice(0, 100) || store.getCapture(other.captureIds[0])?.text.slice(0, 100) || "Source excerpt"}</span><small>{shared ? "Same source" : "Related wording"}</small></button>) : <p>No closely related notes yet.</p>}</div> : null}
   </article>;
 });
@@ -157,7 +173,12 @@ export default function NotebookDock({ open, onClose, title, currentPosition, se
     previousIds.current = new Set(doc.entries.map((entry) => entry.id));
   }, [doc.entries, activeId, query, filter, color, request]);
   const activate = useCallback((id: string) => setActiveId(id), []);
-  const finish = useCallback(() => { if (activeId) store.finishEntry(activeId); setActiveId(null); }, [store, activeId]);
+  const finish = useCallback(() => {
+    if (activeId) store.finishEntry(activeId);
+    setActiveId(null);
+    // Flush now; storage errors remain visible through the dock's save status.
+    void store.flush().catch(() => {});
+  }, [store, activeId]);
   const choose = useCallback((id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]), []);
   const groups = useMemo(() => {
     const terms = deferredQuery.toLowerCase().trim().split(/\s+/).filter(Boolean);

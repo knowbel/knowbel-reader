@@ -337,12 +337,20 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     }
     return attachmentFor(anchor);
   };
+  const startSelectionQuestion = (attached: Attachment[]) => {
+    if (!attached.length) return;
+    const thread = newThread(attached.map((attachment) => attachment.text).join(" ") || "Selected image");
+    notebook.drafts?.setAttachments(`ask:${thread.id}`, attached.reduce(addAttachment, []));
+    askStore.add(thread);
+    setOpenThreadId(thread.id);
+    setPanel("ask"); setAskFocus((n) => n + 1);
+  };
   const addToQuestion = (anchor: FlowAnchor) => {
+    closeTip();
     trackJob((async () => {
       const attached = await selectedAttachments(anchor);
       if (controller.current.signal.aborted) return;
-      setAttachments((previous) => attached.reduce(addAttachment, previous));
-      setPanel("ask"); setAskFocus((n) => n + 1);
+      startSelectionQuestion(attached);
     })().catch((error) => { if (!controller.current.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't attach this selection."); }));
   };
   const dive = useEvent((anchor: FlowAnchor) => {
@@ -419,7 +427,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   const askPanel = (<AskPanel reflowable store={askStore} getContext={getAskContext} hasDocument pageLabels={null} openThreadId={openThreadId} onOpenThread={setOpenThreadId}
           onJob={trackJob} onReturnToPassage={(thread) => { if (thread.anchor) goTo(thread.anchor); }}
           onDiveFromAnswer={diveFromAnswer}
-          onJumpToSource={jumpSource} focusRequest={askFocus} attachments={attachments} onAddToQuestion={(kind, text) => { const attachment = makeAttachment(kind, text); if (attachment) setAttachments((previous) => addAttachment(previous, attachment)); }}
+          onJumpToSource={jumpSource} focusRequest={askFocus} attachments={attachments} onAddToQuestion={(kind, text) => { const attachment = makeAttachment(kind, text); if (attachment) startSelectionQuestion([attachment]); }}
           onRemoveAttachment={(id) => setAttachments((previous) => previous.filter((attachment) => attachment.id !== id))} onClearAttachments={() => setAttachments([])}
           onPin={(text, context) => void saveNotebookExcerpt(notebook, text, { context })} />);
   const selectedAnnotation = selection?.annotationId ? annotations.find((entry) => entry.id === selection.annotationId) : undefined;

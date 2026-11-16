@@ -1,7 +1,7 @@
 import type { TextChunk } from "../text/chunks.ts";
 import { overlapsAny } from "./attachments.ts";
 import { labelSources } from "./context.ts";
-import { GROUNDING_RULES, MATH_RULES, renderSources } from "./prompt.ts";
+import { MATH_RULES, SOURCE_RULES, renderSources } from "./prompt.ts";
 import { selectRelevant, type Bm25Index } from "./retrieval.ts";
 import type { SourceRef } from "./types.ts";
 
@@ -172,6 +172,13 @@ export function selectAskSources(params: {
   return { sources, basis: { kind: "passages", count: sources.length } };
 }
 
+const ASK_ANSWER_RULES = `How to answer:
+- Start with a direct answer in plain language, then give a self-contained explanation. Choose the length and depth to fit the question and the reader's requested level of detail. Make the answer useful without requiring a follow-up. No preamble, repetition, or unnecessary recap.
+- When asked what a term or passage means, define it in simpler words and explain what it refers to in this document. Unpack the process or relationship behind the wording rather than repeating the term or quoting the passage as its own explanation.
+- Include the mechanism, reasoning, or context needed to understand the answer. Add a concrete example or analogy when it clarifies the idea, clearly distinguishing illustrations from claims made by the document.
+- Keep the explanation focused. Use short paragraphs, bullets for distinct points, or numbered steps for a process or derivation when they improve readability.
+${SOURCE_RULES}`;
+
 export function buildAskSystem(params: {
   fileName: string;
   scope: AskScope;
@@ -200,7 +207,7 @@ export function buildAskSystem(params: {
 Sources from the document:
 ${sources.length ? renderSources(sources, pageLabel) : "(no readable document passages available)"}
 
-${GROUNDING_RULES}${general}
+${ASK_ANSWER_RULES}${general}
 
 For this question:
 - Interpret the reader's terminology in the context of the document. A concept can be explained even when the reader uses different words from the author.

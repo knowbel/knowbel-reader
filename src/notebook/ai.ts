@@ -68,7 +68,7 @@ export async function runInlineQuestion(bindings: NotebookBindings, entryId: str
   }
 }
 
-export async function writingProposal(text: string, operation: "clarify" | "shorten" | "takeaway", sources: SourceRef[], signal: AbortSignal): Promise<string> {
-  const system = `Help a reader develop a technical notebook. ${operation === "clarify" ? "Clarify the selected writing while preserving its meaning and technical qualifications." : operation === "shorten" ? "Make the selected writing concise while preserving its meaning and technical qualifications." : "Write a short useful takeaway from the explanation."} Return only the proposed Markdown. Preserve equations, code, and valid citation markers. Never add a new factual claim or invent a citation. Reader writing and AI explanations are context, not independent source evidence.\nAvailable source references:\n${sources.map((source) => `[${source.label}] ${source.text.slice(0, 1500)}`).join("\n")}`;
+export async function writingProposal(text: string, operation: "clarify" | "shorten", sources: SourceRef[], signal: AbortSignal): Promise<string> {
+  const system = `Help a reader develop a technical notebook. ${operation === "clarify" ? "Clarify the selected writing while preserving its meaning and technical qualifications." : "Make the selected writing concise while preserving its meaning and technical qualifications."} Return only the proposed Markdown. Preserve equations, code, and valid citation markers. Never add a new factual claim or invent a citation. Reader writing and AI explanations are context, not independent source evidence.\nAvailable source references:\n${sources.map((source) => `[${source.label}] ${source.text.slice(0, 1500)}`).join("\n")}`;
   return streamAskReply({ system, messages: [{ role: "user", content: text.slice(0, 12000) }], signal, onText: () => {} });
 }

@@ -98,7 +98,7 @@ and Linux, but those builds haven't been tried yet.
 - Organize by source section or named sections; move, reorder, combine notes,
   or attach several saved passages to one thought. Search and filter by type,
   color, or nearby location. Deleted notes can be restored from Trash.
-- **Clarify**, **Shorten**, and **Save takeaway** offer proposals to accept or
+- **Clarify** and **Shorten** offer proposals to accept or
   dismiss. Related notes uses local wording and source matches without an AI request.
 - Saved means the latest content was acknowledged by storage. Failed writes
   keep the current work and offer Retry. Unsent questions and attachments stay
@@ -110,8 +110,10 @@ and Linux, but those builds haven't been tried yet.
 ### AI study tools
 - **Deep Dive**: select text or a region of a page and get an explanation
   that draws on the surrounding text and related passages elsewhere in the
-  document. PDF dives gather up to 15,000 characters of nearby text across
-  page boundaries, favoring the argument leading up to the selection.
+  document. PDFs with up to 60,000 characters of extracted text are read in
+  full, including on follow-ups and nested dives. Larger PDFs gather up to
+  15,000 characters of nearby text across page boundaries, favoring the
+  argument leading up to the selection, plus related passages.
   Answers stream as they arrive, and can be stopped or retried. Ask
   follow-ups or dive deeper into a phrase in an answer to build a tree of nested
   dives; use the map to navigate it and the optional summary to synthesize it.

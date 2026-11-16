@@ -187,7 +187,7 @@ window.__notebookCheck = 'running';
   if(!editor.textContent.includes('WebKit notebook thought') || !editor.querySelector('.katex') || !editor.querySelector('img')) throw new Error('Question deletion changed the surrounding note');
   document.querySelector('button[aria-label="Undo"]').click();
   await wait(()=>document.querySelector('.nb-inline-answer')?.textContent.includes('A grounded WebKit explanation'));
-  document.querySelector('.nb-editor-footer button').click();
+  document.querySelector('.nb-header h2').click();
   await wait(()=>document.querySelector('.nb-entry-writing button[aria-label="Delete AI question"]'));
   document.querySelector('.nb-entry-writing button[aria-label="Delete AI question"]').click();
   await wait(()=>!document.querySelector('.nb-ai-exchange'));

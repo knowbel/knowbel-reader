@@ -1,9 +1,9 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { isFollowUp } from "../grounding/ask";
+import { ASK_BUDGET, isFollowUp } from "../grounding/ask";
 import { attachmentQuery, attachmentSources, type Attachment } from "../grounding/attachments";
 import { citedSources, markersToPages } from "../grounding/citations";
-import { buildDiveSources, buildFollowUpSources, locateSelection } from "../grounding/context";
-import type { LinkTerm } from "../grounding/links";
+import { buildDiveSources, buildFollowUpSources, extendSources, labelSources, locateSelection } from "../grounding/context";
+import { sourceKey, type LinkTerm } from "../grounding/links";
 import type { SourceRef } from "../grounding/types";
 import type { DocumentTextIndex } from "../glossary/textIndex";
 import type { GlossaryEntry } from "../glossary/types";
@@ -18,8 +18,8 @@ import { rootPanelOf } from "./tree";
 import type { DivePanel, DiveTurn } from "./types";
 
 // Everything a dive request is built from beyond the panel itself: the
-// document's text, the reader's notes, and which experiments are on. With
-// every experiment off this is exactly the original request.
+// document's text, the reader's notes, and which experiments are on. Small
+// documents are read in full, using the same cutoff as Ask.
 
 export interface DiveRequestContext {
   pdf: PDFDocumentProxy;
@@ -77,19 +77,38 @@ export async function prepareDiveSources(
   options: { reuse: boolean; attachments: Attachment[]; wider?: boolean },
 ): Promise<{ sources: SourceRef[]; splitAt?: number } | undefined> {
   const x = ctx.experiments;
-  if (options.reuse) {
-    const previous = [...panel.turns].reverse().find((turn) => turn.role === "assistant" && turn.sources);
-    if (previous?.sources) {
-      const splitAt = x.stableSources && panel.baseSources ? Math.min(panel.baseSources.length, previous.sources.length) : undefined;
-      return { sources: previous.sources, splitAt };
-    }
-  }
+  const previous = options.reuse ? [...panel.turns].reverse().find((turn) => turn.role === "assistant" && turn.sources) : undefined;
+  const reused = previous?.sources ? {
+    sources: previous.sources,
+    splitAt: x.stableSources && panel.baseSources ? Math.min(panel.baseSources.length, previous.sources.length) : undefined,
+  } : undefined;
   try {
-    const [index, chunks, bm25] = await Promise.all([getTextIndex(ctx.pdf), getChunks(ctx.pdf), getBm25(ctx.pdf)]);
+    const [index, chunks] = await Promise.all([getTextIndex(ctx.pdf), getChunks(ctx.pdf)]);
+    if (chunks.length && chunks.reduce((sum, chunk) => sum + chunk.text.length, 0) <= ASK_BUDGET.wholeScopeChars) {
+      const whole = labelSources(chunks.map((chunk) => ({
+        label: "", pageNumber: chunk.pageNumber, start: chunk.start, end: chunk.end, text: chunk.text, chunkId: chunk.id,
+      })));
+      // Preserve an existing dive's prefix, including older dives opened
+      // before whole-document context was available. Add every missing
+      // chunk even when a short attached excerpt overlaps it.
+      const base = x.stableSources && panel.baseSources?.length ? panel.baseSources : whole;
+      const taken = new Set(base.map(sourceKey));
+      const extra = [...whole, ...(reused?.sources ?? []), ...attachmentSources(options.attachments, index).map((source) => ({ ...source, via: "attached" as const }))]
+        .filter((source) => {
+          const key = sourceKey(source);
+          if (taken.has(key)) return false;
+          taken.add(key);
+          return true;
+        });
+      const sources = extendSources(base, extra);
+      return { sources, splitAt: x.stableSources ? (panel.baseSources?.length || sources.length) : undefined };
+    }
+    if (reused) return reused;
     const strategy = contextStrategy(x);
     const nested = Boolean(panel.parentId);
     const linking = x.linkedSources || x.nestedContext || x.areaContext;
-    const [xref, sections] = await Promise.all([
+    const [bm25, xref, sections] = await Promise.all([
+      getBm25(ctx.pdf),
       linking ? getXrefIndex(ctx.pdf).catch(() => null) : null,
       x.rankingPriors || x.nestedContext ? getSections(ctx.pdf).catch(() => []) : undefined,
     ]);
@@ -126,7 +145,7 @@ export async function prepareDiveSources(
     const sources = buildDiveSources({ ...input, question: isFirstMessage ? undefined : content }, options.wider ? { typicalChars: 12000, ceilingChars: 40000 } : undefined, strategy);
     return { sources, splitAt: x.stableSources ? sources.length : undefined };
   } catch {
-    return undefined;
+    return reused;
   }
 }
 

@@ -41,6 +41,11 @@ async function wait(expression, message = expression) {
 async function click(selector) {
   await evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error('Missing selector: '+${JSON.stringify(selector)}); el.click(); })()`);
 }
+async function pointerClick(selector) {
+  const {x,y}=await evaluate(`(() => { const el=document.querySelector(${JSON.stringify(selector)});el.scrollIntoView({block:'nearest'});const rect=el.getBoundingClientRect();return {x:rect.left+rect.width/2,y:rect.top+rect.height/2}; })()`);
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',clickCount:1});
+}
 async function fill(selector, text) {
   await evaluate(`(() => {const field=document.querySelector(${JSON.stringify(selector)});field.focus();field.select();})()`);
   if (text) await send('Input.insertText', {text});
@@ -70,6 +75,35 @@ async function select(text, occurrence=0) {
 async function upload(source,name='Native test.md',type='text/markdown') {
   const value = Array.isArray(source) ? `new Uint8Array(${JSON.stringify(source)})` : JSON.stringify(source);
   await evaluate(`(() => { const input=document.querySelector('input[type=file]:not([accept*=json])'); const transfer=new DataTransfer();transfer.items.add(new File([${value}],${JSON.stringify(name)},{type:${JSON.stringify(type)}})); input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true})); })()`);
+}
+async function checkSelectionQuestions(askSelection, passages) {
+  await askSelection(passages[0]);
+  await wait("!!document.querySelector('.ask-composer textarea') && document.querySelectorAll('.ask-turn').length===0");
+  assert.equal(await evaluate("document.querySelector('.ask-composer textarea').value"),'','a selection starts with a clean question draft');
+  await fill('.ask-composer textarea','Explain the first selection.');
+  await click('.ask-composer button[type=submit]');
+  await wait("document.querySelectorAll('.ask-turn-assistant').length===1 && !document.querySelector('.ask-composer textarea').disabled");
+  const firstTitle=await evaluate("document.querySelector('.ask-header h2').textContent");
+  await fill('.ask-composer textarea','Unsent follow-up for the first selection.');
+
+  await askSelection(passages[1]);
+  await wait("document.querySelectorAll('.ask-turn').length===0 && document.querySelector('.ask-composer textarea')?.value===''");
+  assert.deepEqual(await evaluate("[...document.querySelectorAll('.ask-composer .attachment-chip')].map(chip=>chip.title)"),[passages[1]],'only the new selection is attached');
+  assert.ok(await evaluate("document.activeElement===document.querySelector('.ask-composer textarea')"),'the new question receives focus');
+  await fill('.ask-composer textarea','Explain the second selection.');
+  await click('.ask-composer button[type=submit]');
+  await wait("document.querySelectorAll('.ask-turn-assistant').length===1 && !document.querySelector('.ask-composer textarea').disabled");
+  assert.deepEqual(await evaluate("window.__nativeRequests.at(-1).body.messages.map(message=>message.content)"),['Explain the second selection.'],'the new request excludes the earlier conversation');
+
+  await fill('.ask-composer textarea','Why?');
+  await click('.ask-composer button[type=submit]');
+  await wait("document.querySelectorAll('.ask-turn-assistant').length===2 && !document.querySelector('.ask-composer textarea').disabled");
+  assert.equal(await evaluate('window.__nativeRequests.at(-1).body.messages.length'),3,'typed follow-ups retain their thread history');
+  await click('.ask-header button[title="Earlier questions"]');
+  await wait("document.querySelectorAll('.ask-thread-open').length===2");
+  await evaluate(`[...document.querySelectorAll('.ask-thread-open')].find(button=>button.querySelector('.ask-thread-title').textContent===${JSON.stringify(firstTitle)}).click()`);
+  await wait("document.querySelector('.ask-composer textarea')?.value==='Unsent follow-up for the first selection.'");
+  assert.equal(await evaluate("document.querySelectorAll('.ask-turn-assistant').length"),1,'the earlier thread and its draft are preserved');
 }
 const {browserContextId}=await send('Target.createBrowserContext');
 const {targetId}=await send('Target.createTarget',{url:'about:blank',browserContextId});
@@ -170,19 +204,44 @@ await fill('.ask-composer textarea','Unsent question about qubit');
 await click('button[aria-label="Glossary"]');
 await click('button[aria-label="Ask (⌘J)"]');
 await wait("document.querySelector('.ask-composer textarea')?.value==='Unsent question about qubit'");
-assert.ok(await evaluate("document.querySelector('.nb-rich-editor')?.textContent.includes('A thought worth keeping while reading')"));
+assert.ok(await evaluate("document.querySelector('.nb-entry-writing')?.textContent.includes('A thought worth keeping while reading')"));
 assert.equal(await evaluate('window.__documentMutations'),0,'ordinary note typing leaves the document DOM alone');
 await evaluate('window.__docObserver.disconnect()');
 await click('button[aria-label="Close question area"]');
 await click('button[aria-label="Close notebook"]');
 await click('button[aria-label="Notebook"]');
-assert.ok(await evaluate("document.querySelector('.nb-rich-editor')?.textContent.includes('A thought worth keeping while reading')"));
+assert.ok(await evaluate("document.querySelector('.nb-entry-writing')?.textContent.includes('A thought worth keeping while reading')"));
 // Sticky notes edit the same canonical notebook body.
 await evaluate("document.querySelector('.flow-document p').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}))");
 await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
 await fillRich('.nb-entry.is-editing .nb-rich-editor','Remember this passage');
 await wait("document.querySelector('.flow-sticker')?.textContent==='Remember this passage'");
-await click('.nb-entry.is-editing .nb-editor-footer button');
+assert.equal(await evaluate("[...document.querySelectorAll('.nb-editor-shell button')].some(button=>button.textContent==='Done')"),false);
+await pointerClick('.nb-header h2');
+await wait("!document.querySelector('.nb-entry.is-editing') && !!document.querySelector('.nb-save-state.is-saved')");
+assert.ok(await evaluate("[...document.querySelectorAll('.nb-entry-writing')].some(note=>note.textContent==='Remember this passage')"),'clicking a non-focusable surface finishes and saves the note');
+// Moving keyboard focus away also finishes; untouched blank notes disappear.
+await click('button[aria-label="New note"]');
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
+const blankEntryId=await evaluate("document.querySelector('.nb-entry.is-editing').dataset.entryId");
+await evaluate("document.querySelector('input[aria-label=\"Search notebook\"]').focus()");
+await wait(`!document.querySelector('.nb-entry.is-editing') && !document.querySelector('[data-entry-id="${blankEntryId}"]')`);
+assert.ok(await evaluate("document.activeElement===document.querySelector('input[aria-label=\"Search notebook\"]')"),'finishing a note preserves the destination focus');
+// A single click switches between existing notes and retains the latest text.
+await click('button[aria-label="New note"]');
+await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
+await fillRich('.nb-entry.is-editing .nb-rich-editor','Another saved thought');
+const anotherEntryId=await evaluate("document.querySelector('.nb-entry.is-editing').dataset.entryId");
+await pointerClick('.nb-header h2');
+const stickyEntryId=await evaluate("[...document.querySelectorAll('.nb-entry')].find(note=>note.textContent.includes('Remember this passage')).dataset.entryId");
+await pointerClick(`[data-entry-id="${stickyEntryId}"] .nb-entry-writing`);
+await wait(`document.querySelector('.nb-entry.is-editing')?.dataset.entryId==='${stickyEntryId}'`);
+await fillRich('.nb-entry.is-editing .nb-rich-editor','Remember this passage');
+await pointerClick(`[data-entry-id="${anotherEntryId}"] .nb-entry-writing`);
+await wait(`document.querySelector('.nb-entry.is-editing')?.dataset.entryId==='${anotherEntryId}'`);
+assert.equal(await evaluate("document.querySelectorAll('.nb-entry.is-editing .nb-rich-editor').length"),1);
+await pointerClick('.flow-pane');
+await wait("!document.querySelector('.nb-entry.is-editing') && !!document.querySelector('.nb-save-state.is-saved')");
 // Technical rich content, including image paste, equations, and tables.
 await click('button[aria-label="New note"]');
 await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
@@ -209,7 +268,8 @@ await wait("!document.querySelector('.nb-ai-exchange')");
 assert.ok(await evaluate("document.querySelector('.nb-entry.is-editing .nb-rich-editor strong')?.textContent==='Rich document note' && !!document.querySelector('.nb-entry.is-editing table') && !!document.querySelector('.nb-entry.is-editing .katex') && !!document.querySelector('.nb-entry.is-editing img')"),'deleting a question preserves the surrounding note');
 await click('.nb-entry.is-editing button[aria-label="Undo"]');
 await wait("!!document.querySelector('.nb-entry.is-editing .nb-ai-question')");
-await click('.nb-entry.is-editing .nb-editor-footer button');
+await pointerClick('.nb-header h2');
+await wait("!document.querySelector('.nb-entry.is-editing')");
 await click('.nb-entry-writing button[aria-label="Delete AI question"]');
 await wait("!document.querySelector('.nb-ai-exchange')");
 await evaluate("[...document.querySelectorAll('.nb-header-menu button')].find(b=>b.textContent.includes('Undo notebook action')).click()");
@@ -271,6 +331,8 @@ await fill('input[aria-label="Search notebook"]','');
 await evaluate("document.querySelector('select[aria-label=\"Filter notebook\"]').value='images';document.querySelector('select[aria-label=\"Filter notebook\"]').dispatchEvent(new Event('change',{bubbles:true}))");
 await wait("document.querySelectorAll('.nb-entry').length===1");
 await evaluate("document.querySelector('select[aria-label=\"Filter notebook\"]').value='all';document.querySelector('select[aria-label=\"Filter notebook\"]').dispatchEvent(new Event('change',{bubbles:true}))");
+// Selection Ask starts a separate conversation; typed follow-ups keep it.
+await checkSelectionQuestions(async text=>{await select(text);await click('.dive-selection-tip .add-to-question');},['qubit','Repeat target']);
 // Source glossary and Deep Dive remain available behind More.
 await select('qubit');
 await click('.dive-selection-tip button[aria-label="More selection actions"]');
@@ -309,7 +371,20 @@ await wait("!!document.querySelector('.highlight-toolbar .TextHighlight__comment
 await click('.highlight-toolbar .TextHighlight__comment-button');
 await wait("!!document.querySelector('.nb-entry.is-editing .nb-rich-editor')");
 await fillRich('.nb-entry.is-editing .nb-rich-editor','Edited PDF note');
-await click('.nb-entry.is-editing .nb-editor-footer button');
+await pointerClick('.nb-header h2');
+await wait("!document.querySelector('.nb-entry.is-editing') && !!document.querySelector('.nb-save-state.is-saved')");
+await checkSelectionQuestions(async text=>{
+  await evaluate("document.querySelector('.PdfHighlighter .textLayer').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0}))");
+  await evaluate(`(() => {
+    const span=[...document.querySelectorAll('.PdfHighlighter .textLayer span')].find(node=>node.textContent.includes(${JSON.stringify(text)}));
+    const start=span.textContent.indexOf(${JSON.stringify(text)}),range=document.createRange();
+    range.setStart(span.firstChild,start);range.setEnd(span.firstChild,start+${text.length});
+    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+    span.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,button:0}));
+  })()`);
+  await wait("!!document.querySelector('.expandable-tip .add-to-question:not(:disabled)')");
+  await click('.expandable-tip .add-to-question');
+},['PDF smoke test','smoke']);
 await click('.highlight-anchor[data-highlight-id="pdf-test-highlight"] .TextHighlight__part');
 await wait("!!document.querySelector('.highlight-toolbar button[aria-label=\"More selection actions\"]')");
 await click('.highlight-toolbar button[aria-label="More selection actions"]');
@@ -359,8 +434,10 @@ const notebookOpenMs=Date.now()-notebookStart;
 const notebookTypingMaxTaskMs=Math.round(await evaluate('Math.max(0,...window.__longTasks)'));
 await click('button[aria-label="Library"]');await wait("!!document.querySelector('.library')");
 await evaluate("[...document.querySelectorAll('.library-card-open')].find(button=>button.textContent.includes('Long Native')).click()");
-await wait("document.querySelector('.nb-rich-editor')?.textContent.includes('Performance thought')");
-assert.equal(await evaluate("document.querySelector('.nb-entry.is-editing')?.dataset.entryId"),'perf-note-0','the active writing place is restored');
+await wait("document.querySelector('.nb-entry-writing')?.textContent.includes('Performance thought')");
+assert.equal(await evaluate("document.querySelector('.nb-entry.is-editing')"),null,'leaving for the library finishes editing');
+await click('.nb-entry-writing');
+await wait("document.querySelector('.nb-entry.is-editing')?.dataset.entryId==='perf-note-0'");
 await send('Input.insertText',{text:' continued'});
 assert.ok(await evaluate("document.querySelector('.nb-rich-editor').textContent.includes('Performance thought continued')"),'caret returns to its saved position');
 await send('Emulation.setDeviceMetricsOverride',{width:600,height:850,deviceScaleFactor:1,mobile:false});
