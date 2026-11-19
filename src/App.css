@@ -1933,7 +1933,7 @@
   text-align: left;
 }
 
-.dive-turn a {
+.dive-turn a:not(.cite-chip) {
   color: inherit;
   text-decoration: underline;
 }
@@ -2594,9 +2594,6 @@
 }
 
 /* How the definition was arrived at (see GlossarySource). */
-/* One look for "where did this come from" badges — the glossary's
-   definitions and grounded answers alike (grounding/AnswerParts.tsx). */
-.source-badge,
 .glossary-source {
   border: 1px solid var(--border-strong);
   border-radius: 999px;
@@ -3156,24 +3153,10 @@
 /* ---- Grounded answers (src/grounding) ---------------------------------- */
 
 .answer-badge {
-  display: inline-block;
-  margin-bottom: 0.35rem;
-}
-
-.answer-badge--document,
-.answer-badge--inferred {
-  border-color: var(--link);
-  background: var(--link-tint);
-  color: var(--link);
-}
-
-.answer-badge--inferred {
-  border-style: dotted;
-}
-
-.answer-badge--general,
-.answer-badge--not-covered {
-  border-style: dashed;
+  display: block;
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 /* A citation after a claim. No text of its own (see CitationChip): the label
@@ -3225,6 +3208,21 @@
   color: var(--danger);
 }
 
+:is(.dive-turn-assistant, .ask-turn-assistant, .tree-summary) .cite-chip {
+  margin: 0 0 0 0.12em;
+  padding: 0.08em 0.2em;
+  border: 0;
+  border-radius: 0.2em;
+  font-size: 0.65em;
+  font-weight: 500;
+  line-height: 1.2;
+  vertical-align: 0.3em;
+}
+
+:is(.dive-turn-assistant, .ask-turn-assistant, .tree-summary) .cite-chip::after {
+  content: attr(data-marker);
+}
+
 .cite-preview {
   position: fixed;
   z-index: 60;
@@ -3248,7 +3246,8 @@
 .cite-preview-source,
 .answer-sources-item {
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.15rem;
   width: 100%;
   padding: 0.35rem;
   border: 0;
@@ -3266,11 +3265,11 @@
 }
 
 .cite-preview-page {
-  flex: none;
   color: var(--link);
   font-size: 0.78rem;
   font-weight: 600;
   white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .cite-preview-text mark {
@@ -3289,6 +3288,7 @@
 
 .answer-sources {
   min-width: 0;
+  color: var(--muted);
   font-size: 0.78rem;
 }
 
@@ -3306,11 +3306,7 @@
   cursor: pointer;
 }
 
-.answer-sources-toggle:disabled {
-  cursor: default;
-}
-
-.answer-sources-toggle:not(:disabled):hover,
+.answer-sources-toggle:hover,
 .answer-more:hover {
   color: var(--link);
 }
@@ -3321,8 +3317,12 @@
   text-underline-offset: 2px;
 }
 
-.answer-sources-list {
+.answer-sources-basis {
   margin: 0.35rem 0 0;
+}
+
+.answer-sources-list {
+  margin: 0.15rem 0 0;
   padding: 0;
   list-style: none;
 }

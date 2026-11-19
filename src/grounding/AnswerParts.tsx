@@ -2,29 +2,26 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ResolvedRef } from "./CitationChip";
 import type { AnswerGrounding, SourceRef } from "./types";
-import { sourceLabel } from "./citations";
+import { citationNumber, sourceLabel } from "./citations";
 
-const BADGES: Record<AnswerGrounding, { label: string; title: string }> = {
-  document: { label: "Cites the document", title: "The answer cites passages supplied to the model; citations do not verify every claim." },
+const BADGES: Record<Exclude<AnswerGrounding, "document">, { label: string; title: string }> = {
   inferred: {
     label: "Includes cited inference",
     title: "The answer marks some points as inferred from cited passages.",
   },
   mixed: {
     label: "Mixed sources",
-    title: "The answer contains general knowledge or citations that could not be resolved — see the chips.",
+    title: "The answer includes general knowledge, unresolved citations, or quotes that could not be matched. See the inline references.",
   },
   general: { label: "No document citations", title: "The answer contains no valid document citations." },
   "not-covered": { label: "Not found in these passages", title: "The passages supplied did not answer this question." },
 };
 
-// One badge per answer, summarizing its citations — the same look as the
-// glossary's source badge, so there's one vocabulary for "where did this
-// come from".
 export function AnswerBadge({ grounding }: { grounding: AnswerGrounding }) {
+  if (grounding === "document") return null;
   const { label, title } = BADGES[grounding];
   return (
-    <span className={`source-badge answer-badge answer-badge--${grounding}`} title={title}>
+    <span className="answer-badge" title={title}>
       {label}
     </span>
   );
@@ -47,10 +44,8 @@ export function SourcesFooter({
 }) {
   const [open, setOpen] = useState(false);
   if (sent.length === 0) return null;
-  const pages = [...new Set(cited.map((source) => sourceLabel(source, pageLabel)))];
-  const summary = `${basis ?? `${sent.length} passage${sent.length === 1 ? "" : "s"} supplied`}${
-    pages.length ? ` · cites ${pages.join(", ")}` : ""
-  }`;
+  const summary = basis ?? `${sent.length} passage${sent.length === 1 ? "" : "s"} supplied`;
+  if (cited.length === 0) return <div className="answer-sources">{summary}</div>;
   return (
     <div className="answer-sources">
       <button
@@ -58,29 +53,31 @@ export function SourcesFooter({
         className="answer-sources-toggle"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        disabled={cited.length === 0}
       >
-        {cited.length > 0 ? open ? <ChevronDown width={13} height={13} /> : <ChevronRight width={13} height={13} /> : null}
-        {summary}
+        {open ? <ChevronDown width={13} height={13} /> : <ChevronRight width={13} height={13} />}
+        Sources ({cited.length})
       </button>
       {open ? (
-        <ul className="answer-sources-list">
-          {cited.map((source) => (
-            <li key={source.label}>
-              <button
-                type="button"
-                className="answer-sources-item"
-                onClick={() => onJump({ source, range: [source.start, source.end] })}
-                title="Show in the document"
-              >
-                <span className="cite-preview-page">{sourceLabel(source, pageLabel)}</span>
-                <span className="answer-sources-snippet">
-                  {source.text.length > 180 ? `${source.text.slice(0, 180)}…` : source.text}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="answer-sources-basis">{summary}</div>
+          <ul className="answer-sources-list">
+            {cited.map((source) => (
+              <li key={source.label}>
+                <button
+                  type="button"
+                  className="answer-sources-item"
+                  onClick={() => onJump({ source, range: [source.start, source.end] })}
+                  title="Show in the document"
+                >
+                  <span className="cite-preview-page">[{citationNumber(source)}] {sourceLabel(source, pageLabel)}</span>
+                  <span className="answer-sources-snippet">
+                    {source.text.length > 180 ? `${source.text.slice(0, 180)}…` : source.text}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : null}
     </div>
   );

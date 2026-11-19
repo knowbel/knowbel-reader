@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useFlippedPlacement, type AnchorRect } from "../deepdive/useFlippedPlacement";
 import type { ChipTarget } from "./citations";
 import type { SourceRef } from "./types";
-import { sourceLabel } from "./citations";
+import { citationNumber, sourceLabel } from "./citations";
 
 const SHOW_DELAY_MS = 200;
 const HIDE_DELAY_MS = 200;
@@ -18,7 +18,7 @@ export interface ResolvedRef {
 export interface CitationChipProps {
   kind: ChipTarget["kind"];
   quoteMissing: boolean;
-  label: string; // "p. 42", "general", …
+  label: string; // full page, section, or citation status label
   refs: ResolvedRef[];
   pageLabel: (pageNumber: number) => string;
   onJump: (ref: ResolvedRef) => void;
@@ -33,7 +33,7 @@ const KIND_NOTES: Record<ChipTarget["kind"], string> = {
 
 // A citation after a claim: hover to read the passage it rests on, click to
 // see it in the PDF. The chip has no text of its own — its label is drawn
-// by CSS from data-label — because dive selections and highlights count
+// by CSS from data attributes — because dive selections and highlights count
 // characters in the rendered answer, and a chip's text would shift them.
 export default function CitationChip({ kind, quoteMissing, label, refs, pageLabel, onJump }: CitationChipProps) {
   const [anchor, setAnchor] = useState<AnchorRect | null>(null);
@@ -55,6 +55,7 @@ export default function CitationChip({ kind, quoteMissing, label, refs, pageLabe
   const description = [label, KIND_NOTES[kind], quoteMissing ? "The quoted words weren't found in the passage." : ""]
     .filter(Boolean)
     .join(". ");
+  const marker = refs[0] ? `[${citationNumber(refs[0].source)}${refs.length > 1 ? "+" : ""}]` : label;
 
   return (
     <>
@@ -63,6 +64,7 @@ export default function CitationChip({ kind, quoteMissing, label, refs, pageLabe
         href="#"
         className={`cite-chip cite-chip--${kind}${quoteMissing ? " cite-chip--warn" : ""}`}
         data-label={label}
+        data-marker={marker}
         data-source-labels={refs.map((ref) => ref.source.label).join(",")}
         data-citation-kind={kind}
         aria-label={`Source: ${description}`}

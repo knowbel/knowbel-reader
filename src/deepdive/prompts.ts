@@ -1,5 +1,5 @@
 import { markersToPages } from "../grounding/citations.ts";
-import { GROUNDING_RULES, MATH_RULES, renderSources } from "../grounding/prompt.ts";
+import { CITATION_RULES, GROUNDING_RULES, MATH_RULES, renderSources } from "../grounding/prompt.ts";
 import type { SourceRef } from "../grounding/types.ts";
 import type { DivePanel } from "./types.ts";
 
@@ -35,8 +35,7 @@ const ORIENT_AND_EXPLAIN = (citeScope: string) => `How to answer:
 - Answer the reader's actual question first. Otherwise explain the selected passage in plain language, how it fits the nearby argument, and the key dependency or missing step needed to continue reading.
 - Adapt to the passage: explain important symbols and assumptions for an equation, the goal and pivotal step of a proof, and what is visible versus what the caption establishes for a figure. Use only guidance that fits. Build difficult ideas in small steps and use numbered steps for a derivation when helpful. Use as much detail as the explanation needs; avoid preamble and repetition.
 - Explain with the document's own definitions, equations and examples first; bring in outside knowledge only for what the sources don't cover.
-- After each claim taken from a source, cite it by id: [S2] (several: [S2][S5]). For something you reasoned from the sources rather than read there: [inferred: S2]. For anything from outside the sources: [general].
-- Quote the document only word for word, in quotation marks, followed by its citation — prose only; never quote a formula (write it in LaTeX instead).
+${CITATION_RULES}
 - Never cite an id that isn't listed ${citeScope}.
 - Use general background when useful and mark it [general]; do not claim that it is the author's meaning without evidence. If the passages and image do not support an answer, say what remains uncertain. If the supplied passages do not answer the question and general knowledge was not requested, begin with [not-covered]. Never invent a source or a missing step.`;
 

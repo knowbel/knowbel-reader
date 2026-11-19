@@ -189,6 +189,10 @@ export function sourceLabel(source: SourceRef, pageLabel: (page: number) => stri
   return source.locationLabel || `p. ${pageLabel(source.pageNumber)}`;
 }
 
+export function citationNumber(source: SourceRef): string {
+  return source.label.replace(/^S(?=\d+$)/i, "");
+}
+
 export function sourceChipLabel(kind: CitationGroup["kind"], sources: SourceRef[], pageLabel: (page: number) => string): string {
   if (sources.some((source) => source.location)) {
     if (kind === "general" || kind === "unverified") return kind;

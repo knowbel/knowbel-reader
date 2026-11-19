@@ -76,6 +76,26 @@ async function upload(source,name='Native test.md',type='text/markdown') {
   const value = Array.isArray(source) ? `new Uint8Array(${JSON.stringify(source)})` : JSON.stringify(source);
   await evaluate(`(() => { const input=document.querySelector('input[type=file]:not([accept*=json])'); const transfer=new DataTransfer();transfer.items.add(new File([${value}],${JSON.stringify(name)},{type:${JSON.stringify(type)}})); input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true})); })()`);
 }
+async function checkCompactCitations(turn) {
+  const citation = `${turn} .cite-chip`;
+  const sources = `${turn} .answer-sources-toggle`;
+  await wait(`!!document.querySelector('${citation}') && !!document.querySelector('${sources}')`);
+  const label = await evaluate(`(() => {
+    const chip = document.querySelector('${citation}');
+    chip.focus();
+    return chip.dataset.label;
+  })()`);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('${citation}'), '::after').content`), '"[1]"');
+  assert.equal(await evaluate(`document.querySelector('${citation}').textContent`), '', 'markers preserve selection offsets');
+  await wait("!!document.querySelector('.cite-preview .cite-preview-page')");
+  assert.equal(await evaluate("document.querySelector('.cite-preview .cite-preview-page').textContent"), label);
+  await evaluate(`document.querySelector('${citation}').blur()`);
+  assert.equal(await evaluate(`document.querySelector('${sources}').textContent.trim()`), 'Sources (1)');
+  await click(sources);
+  assert.equal(await evaluate(`document.querySelector('${turn} .answer-sources-item .cite-preview-page').textContent`), `[1] ${label}`);
+  await click(sources);
+  await wait("!document.querySelector('.cite-preview')");
+}
 async function checkSelectionQuestions(askSelection, passages) {
   await askSelection(passages[0]);
   await wait("!!document.querySelector('.ask-composer textarea') && document.querySelectorAll('.ask-turn').length===0");
@@ -83,6 +103,7 @@ async function checkSelectionQuestions(askSelection, passages) {
   await fill('.ask-composer textarea','Explain the first selection.');
   await click('.ask-composer button[type=submit]');
   await wait("document.querySelectorAll('.ask-turn-assistant').length===1 && !document.querySelector('.ask-composer textarea').disabled");
+  await checkCompactCitations('.ask-turn-assistant');
   const firstTitle=await evaluate("document.querySelector('.ask-header h2').textContent");
   await fill('.ask-composer textarea','Unsent follow-up for the first selection.');
 
@@ -152,9 +173,13 @@ await click('button[aria-label^="View ("]');
 assert.equal(await evaluate("document.querySelector('.view-menu-action').textContent"),'Open original page');
 await click('button[aria-label^="View ("]');
 await evaluate("document.querySelector('.flow-scroll').scrollTop=0");
-await select('A URL passage worth annotating.');
-await click('.dive-selection-tip .TextHighlight__highlight-button');
-await wait("document.querySelector('.flow-mark')?.textContent==='A URL passage worth annotating.'");
+// The original-page toolbar and Study text share the same saved dive anchor.
+await evaluate("window.__knowbelPageEvent({action:'dive', url:'https://example.invalid/blog/article', text:'A URL passage worth annotating.', prefix:'', suffix:'', scrollY:0})");
+await wait("!!document.querySelector('.dive-turn-assistant .cite-chip') && !document.querySelector('.dive-turn-streaming')");
+await wait("document.querySelector('.flow-mark[data-annotation-id]')?.textContent==='A URL passage worth annotating.'");
+await wait("document.querySelector('.nb-entry blockquote')?.textContent==='A URL passage worth annotating.' && [...document.querySelectorAll('.nb-entry .nb-source-meta button')].some(button=>button.textContent==='Conversation')");
+await click('.deep-dive-crumb');
+await wait("!document.querySelector('.deep-dive-view')");
 await evaluate("document.querySelector('.flow-document a[href=\"#url-results\"]').click()");
 await wait("document.querySelector('.flow-scroll').scrollTop>500");
 await click('button[aria-label="Library"]');
@@ -163,6 +188,19 @@ await evaluate('window.__denyWeb=true');
 await evaluate("[...document.querySelectorAll('.library-card-open')].find(button=>button.textContent.includes('Native URL Study')).click()");
 await wait("document.querySelector('.flow-mark')?.textContent==='A URL passage worth annotating.' && document.querySelector('.nb-entry')?.textContent.includes('A URL passage worth annotating.')");
 await wait("[...document.querySelectorAll('.flow-document img')].every(image=>image.naturalWidth>0)");
+const urlDiveCalls=await evaluate('window.__nativeRequests.length');
+await pointerClick('.flow-mark[data-annotation-id]');
+await wait("!!document.querySelector('.dive-turn-assistant .cite-chip')");
+assert.ok(await evaluate("!document.querySelector('.flow-selection-tip')"),'the first click opens the linked dive');
+await pointerClick('.flow-mark[data-annotation-id]');
+await click('.dive-selection-tip button[aria-label="More selection actions"]');
+assert.ok(await evaluate("!!document.querySelector('.dive-selection-tip button[title=\"Open this dive\"]')"),'the second click offers the highlight toolbar');
+await pointerClick('.deep-dive-crumb');
+await wait("!document.querySelector('.deep-dive-view')");
+await evaluate("window.__knowbelPageEvent({action:'open-dive', url:'https://example.invalid/blog/article', annotationId:document.querySelector('.flow-mark[data-annotation-id]').dataset.annotationId, text:'', prefix:'', suffix:'', scrollY:0})");
+await wait("!!document.querySelector('.dive-turn-assistant .cite-chip')");
+assert.equal(await evaluate('window.__nativeRequests.length'),urlDiveCalls,'both views reopen the saved URL conversation without asking AI again');
+assert.equal(await evaluate("document.querySelectorAll('.nb-entry').length"),1,'reopening a dive reuses its Notebook entry');
 assert.equal(await evaluate('!!window.pdfjsLib'),false,'URL articles never load PDF.js');
 await click('button[aria-label="Library"]');
 await wait("!!document.querySelector('.library')");
@@ -440,7 +478,7 @@ await evaluate('void(window.__sourceFlow=document.querySelector(".flow-document"
 await select('qubit');
 await click('.dive-selection-tip button[aria-label="More selection actions"]');
 await click('.dive-selection-tip button[title="Dive deeper"]');
-await wait("!!document.querySelector('.dive-turn-assistant .cite-chip')");
+await checkCompactCitations('.dive-turn-assistant');
 await click('.dive-turn-assistant .cite-chip');
 await wait("!!document.querySelector('.flow-mark--flash')");
 assert.ok(await evaluate('window.__sourceFlow===document.querySelector(".flow-document")'),'opening a dive preserves source DOM');

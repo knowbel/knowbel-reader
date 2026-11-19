@@ -636,9 +636,6 @@ export default function DivePanelPane({
             <SourceExcerpt key={index} panel={panel} annotate={annotate} components={markdownComponents} />
           ) : (
             <div key={turn.id ?? index} data-turn-id={turn.id} className={`dive-turn dive-turn-${turn.role}`}>
-              {isGroundedAnswer(turn) ? (
-                <AnswerBadge grounding={answerGrounding(parseAnswer(turn.content, turn.sources))} />
-              ) : null}
               {turn.role === "assistant" && diagramOf(turn.content).code ? (
                 <MermaidDiagram code={diagramOf(turn.content).code!} />
               ) : null}
@@ -657,6 +654,9 @@ export default function DivePanelPane({
                 sources={turn.role === "assistant" ? turn.sources : undefined}
                 pageLabel={pageLabel}
               />
+              {isGroundedAnswer(turn) ? (
+                <AnswerBadge grounding={answerGrounding(parseAnswer(turn.content, turn.sources))} />
+              ) : null}
               {turn.role === "assistant" && (turn.status === "error" || turn.status === "cancelled" || turn.content.startsWith("⚠️")) && index === panel.turns.length - 1 ? (
                 <div><button type="button" className="answer-more" disabled={awaitingReply} onClick={() => {
                   const question = panel.turns[index - 1];

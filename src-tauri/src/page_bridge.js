@@ -17,7 +17,7 @@
   };
   // Actions the reader accepts from this page. Only trusted (user) events
   // queue them, so page scripts cannot start notes, questions or dives.
-  const allowed = new Set(['highlight','pen','note','open-note','ask','dive','glossary','delete','pin','key']);
+  const allowed = new Set(['highlight','pen','note','open-note','ask','dive','open-dive','glossary','delete','pin','key']);
   // Mirrors highlightColors.ts and HighlightToolbar so a live page offers the
   // same selection controls as every other document.
   const presets = [['rgba(255, 226, 143, 1)','Yellow'],['#ffcdd2','Red'],['#c8e6c9','Green'],['#bbdefb','Blue'],['#e1bee7','Purple']];
@@ -141,7 +141,7 @@ svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-l
       const more=document.createElement('div');more.className='more';
       const actions=document.createElement('div');actions.className='row';
       actions.append(control('',copied?'Copied':'Copy text',[svg(copied?'check':'copy'),'Copy'],()=>{void navigator.clipboard.writeText(cached.text).then(()=>{copied=true;show();},()=>{});}));
-      actions.append(control('',mark?.dive?'Open this dive':'Dive deeper',['Dive ↗'],event=>{notify('dive',event);done();}));
+      actions.append(control('',mark?.diveId?'Open this dive':'Dive deeper',['Dive ↗'],event=>{notify(mark?.diveId?'open-dive':'dive',event);done();}));
       if(!mark)actions.append(control('','',['Add to notebook'],event=>{notify('pin',event);done();}));
       const reason=glossaryReason(cached.text), glossary=control('',reason||'Add to glossary',['Glossary'],event=>{notify('glossary',event);done();});glossary.disabled=!!reason;actions.append(glossary);
       if(mark)actions.append(control('delete','Remove highlight',[svg('trash')],event=>{notify('delete',event);done();}));
@@ -268,11 +268,16 @@ svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-l
         return;
       }
       const marked=hit(event);
-      if(marked){cache(marked.range,marked.id);show();return;}
+      if(marked){
+        cache(marked.range,marked.id);
+        if(marked.diveId&&marked.diveId!==config.activeDiveId){notify('open-dive',event);done();}
+        else show();
+        return;
+      }
       if(config.tool==='note'){const range=blockRange(event.target);if(range&&cache(range))notify('note',event);cached=null;}
     });
   },true);
-  // A click on a mark opens its toolbar, even when the mark is in a link.
+  // A click belongs to the mark even when it sits inside a link.
   document.addEventListener('click',event=>{if(!ui(event.target)&&event.isTrusted&&getSelection()?.isCollapsed!==false&&hit(event)){event.preventDefault();event.stopPropagation();}},true);
   document.addEventListener('keydown',event=>{
     if(!event.isTrusted||event.target?.closest?.('input,textarea,select,[contenteditable=true],[contenteditable=""]'))return;

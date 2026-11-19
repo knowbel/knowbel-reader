@@ -6,13 +6,13 @@ export interface PageSelection { text: string; prefix: string; suffix: string; u
 // A trusted action from the page's selection toolbar, tools or shortcuts.
 export interface PageInteraction extends PageSelection {
   // "settled" comes from the page itself once it has finished loading.
-  action: "highlight" | "pen" | "note" | "open-note" | "ask" | "dive" | "glossary" | "delete" | "pin" | "key" | "settled";
+  action: "highlight" | "pen" | "note" | "open-note" | "ask" | "dive" | "open-dive" | "glossary" | "delete" | "pin" | "key" | "settled";
   annotationId?: string; color?: string; style?: "highlight" | "underline" | "strikethrough";
   key?: string; metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean;
 }
 export interface PageQuote { text: string; prefix: string; suffix: string }
-export interface PageMark extends PageQuote { id: string; color: string; style: string; kind: string; paper?: string }
-export interface PageSettings { tool: string; color: string; style: string }
+export interface PageMark extends PageQuote { id: string; color: string; style: string; kind: string; paper?: string; diveId?: string }
+export interface PageSettings { tool: string; color: string; style: string; activeDiveId: string | null }
 let operations: Promise<unknown> = Promise.resolve();
 function ordered<T>(work: () => Promise<T>): Promise<T> {
   const result = operations.catch(() => {}).then(work);

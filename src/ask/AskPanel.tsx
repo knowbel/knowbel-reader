@@ -402,8 +402,8 @@ function TurnView({
   const notCovered = grounding === "not-covered";
   return (
     <div className="ask-turn ask-turn-assistant" data-turn-id={turn.id}>
-      {!streaming ? <AnswerBadge grounding={grounding} /> : null}
       <AnswerMarkdown content={turn.content} sources={sources} pageLabel={pageLabel} onJump={onJump} streaming={streaming} />
+      {!streaming ? <AnswerBadge grounding={grounding} /> : null}
       {!streaming ? (
         <div className="answer-footer">
           {notCovered ? (

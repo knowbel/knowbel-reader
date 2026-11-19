@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import ReactMarkdown, { type Components, type Options as MarkdownOptions } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -34,8 +34,13 @@ export default function AnswerMarkdown({
   onJump: (ref: ResolvedRef) => void;
   streaming?: boolean;
 }) {
+  const byLabel = useMemo(() => new Map(sources.map((source) => [source.label, source])), [sources]);
+  const handlers = useRef({ byLabel, pageLabel, onJump });
+  handlers.current = { byLabel, pageLabel, onJump };
+
+  // Keep the link component stable so a reader update preserves citation
+  // focus and any open preview.
   const components = useMemo<Components>(() => {
-    const byLabel = new Map(sources.map((source) => [source.label, source]));
     return {
       a: ({ href, title, children }) => {
         const target = href ? decodeChipTarget(href) : null;
@@ -46,6 +51,7 @@ export default function AnswerMarkdown({
             </a>
           );
         }
+        const { byLabel, pageLabel } = handlers.current;
         const refs = target.refs.flatMap(({ label, start, end }): ResolvedRef[] => {
           const source = byLabel.get(label);
           return source ? [{ source, range: [start, end] }] : [];
@@ -57,12 +63,12 @@ export default function AnswerMarkdown({
             label={title ?? chipLabel(target.kind, refs.map((ref) => pageLabel(ref.source.pageNumber)))}
             refs={refs}
             pageLabel={pageLabel}
-            onJump={onJump}
+            onJump={(ref) => handlers.current.onJump(ref)}
           />
         );
       },
     };
-  }, [sources, pageLabel, onJump]);
+  }, []);
 
   const text = streaming ? trimPartialMarker(content) : content;
   const markdown = toChipMarkdown(normalizeMathNotation(text, { promote: true }), sources, 0, pageLabel);

@@ -268,6 +268,15 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
 
   });
   const closeTip = useCallback(() => { setSelection(null); setTipGlossaryId(null); }, []);
+  const linkedDiveId = useCallback((annotationId: string) => {
+    const id = notebook.getCapture(`native:${annotationId}`)?.conversationId;
+    return id && askStore.get(id)?.mode === "dive" ? id : undefined;
+  }, [notebook, askStore]);
+  const openSavedDive = useCallback((id: string) => {
+    closeTip();
+    setDiveFocusId(id);
+    setPanel(null);
+  }, [closeTip]);
   const placeHere = () => {
     const point = metaRef.current.readingPosition;
     return point ? textAnchor(model, point, point) : null;
@@ -317,11 +326,11 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       const current = notebook.getNativeAnnotations().find((item) => item.id === existing.native!.id);
       if (current) return current;
       const restored = { ...existing.native, comment: notebook.plain(notebook.entryForCapture(existing.id)) };
-      changeAnnotations([restored, ...annotations]); return restored;
+      setAnnotations((previous) => [restored, ...previous]); return restored;
     }
     const annotation: DocumentAnnotation = { id: crypto.randomUUID(), kind, anchor, text: anchorText(model, anchor), comment, color, style,
       paper: kind === "sticker" ? STICKER_DEFAULT_PAPER : undefined, createdAt: new Date().toISOString() };
-    changeAnnotations([annotation, ...annotations]);
+    setAnnotations((previous) => [annotation, ...previous]);
     if (anchor.kind === "object") {
       const object = model.objects.find((object) => object.id === anchor.objectId && object.blockId === anchor.blockId);
       if (object?.kind === "table") {
@@ -335,6 +344,11 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     return annotation;
   });
   const captureSelection = useEvent((next: FlowSelection) => {
+    const id = next.annotationId ? linkedDiveId(next.annotationId) : undefined;
+    if (id && id !== diveFocusId) {
+      openSavedDive(id);
+      return;
+    }
     setTipGlossaryId(null);
     if (tool === "highlight" && !next.annotationId) {
       saveAnnotation(next.anchor, "highlight");
@@ -442,21 +456,28 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   };
   const dive = useEvent((anchor: FlowAnchor) => {
     closeTip();
-    const existing = askStore.getSnapshot().find((thread) => thread.mode === "dive" && !thread.parentThreadId && thread.anchor && sameAnchor(thread.anchor, anchor));
+    window.getSelection()?.removeAllRanges();
+    const findExisting = () => askStore.getSnapshot().find((thread) => thread.mode === "dive" && !thread.parentThreadId && thread.anchor && sameAnchor(thread.anchor, anchor));
+    const open = (id: string) => {
+      saveAnnotation(anchor, "highlight", "", pen.color, "highlight");
+      notebook.enrichCaptures((capture) => capture.native && capture.conversationId !== id && sameAnchor(capture.native.anchor, anchor) ? { ...capture, conversationId: id } : capture);
+      openSavedDive(id);
+    };
+    const existing = findExisting();
     if (existing) {
       goTo(anchor);
-      setDiveFocusId(existing.id); setPanel(null);
+      open(existing.id);
       return;
     }
     trackJob((async () => {
       const attached = await selectedAttachments(anchor);
-      if (controller.current.signal.aborted) return;
+      if (controller.current.signal.aborted || !attached.length) return;
+      const existing = findExisting();
+      if (existing) return open(existing.id);
       const quote = anchorText(model, anchor).trim();
-      if (!attached.length) return;
       const thread = { ...newThread(quote.slice(0, 80) || "Deep Dive"), mode: "dive" as const, anchor, selection: quote, selectionImage: attached.find((attachment) => attachment.image)?.image };
       askStore.add(thread);
-      notebook.enrichCaptures((capture) => capture.native && sameAnchor(capture.native.anchor, anchor) ? { ...capture, conversationId: thread.id } : capture);
-      setDiveFocusId(thread.id); setPanel(null);
+      open(thread.id);
       await sendNativeDive(askStore, thread.id, openingMessage(quote), getAskContext(), session.diveControllers, { attachments: attached });
     })().catch((error) => { if (!controller.current.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't start this dive."); }));
   });
@@ -531,8 +552,8 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   }, [pageOpened, pageRevision, pageOwner, scale]);
   const pageMarks = useMemo(() => annotations.flatMap((mark): PageMark[] => {
     const quote = pageQuote(model, mark.anchor);
-    return quote?.text.trim() ? [{ ...quote, id: mark.id, color: mark.color, style: mark.style, kind: mark.kind, paper: mark.paper }] : [];
-  }), [annotations, model]);
+    return quote?.text.trim() ? [{ ...quote, id: mark.id, color: mark.color, style: mark.style, kind: mark.kind, paper: mark.paper, diveId: linkedDiveId(mark.id) }] : [];
+  }), [annotations, model, linkedDiveId]);
   // Paint saved marks on the live page and pass it the active tool and pen.
   // A jump (Notebook, search, citation) scrolls the page once per request;
   // a passage the live page no longer has opens in Study text instead.
@@ -543,7 +564,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     const timer = setTimeout(() => {
       const onDocument = pageOnDocument.current;
       const focus = target && onDocument ? pageQuote(model, target.anchor) : null;
-      void import("../web/browser").then(({ decoratePage }) => decoratePage(pageOwner, onDocument ? pageMarks : [], focus, { tool, color: pen.color, style: pen.style })).then((result) => {
+      void import("../web/browser").then(({ decoratePage }) => decoratePage(pageOwner, onDocument ? pageMarks : [], focus, { tool, color: pen.color, style: pen.style, activeDiveId: diveFocusId })).then((result) => {
         if (cancelled || !target) return;
         pageFocused.current = target.sequence;
         if (result.found) return;
@@ -553,7 +574,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       }).catch(() => {});
     }, target ? 0 : 250);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [pageMode, pageRevision, pageOwner, pageMarks, navigate, model, tool, pen]);
+  }, [pageMode, pageRevision, pageOwner, pageMarks, navigate, model, tool, pen, diveFocusId]);
   // Actions from the live page's selection toolbar, tools and shortcuts. Its
   // selections become the same semantic anchors Study text uses, so notes,
   // questions and dives are shared by both views.
@@ -567,6 +588,11 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     const penChange = { ...(event.color ? { color: event.color } : {}), ...(event.style ? { style: event.style } : {}) };
     if (event.action === "pen") { changePen(penChange); return; }
     const existing = event.annotationId ? annotations.find((item) => item.id === event.annotationId) : undefined;
+    if (event.action === "open-dive") {
+      const id = existing && linkedDiveId(existing.id);
+      if (id && pageUrl && samePage(event.url, pageUrl)) { openSavedDive(id); focusReader(); }
+      return;
+    }
     let anchor = existing?.anchor ?? null;
     if (!anchor) {
       if (!pageUrl || !samePage(event.url, pageUrl)) { showNotice("This is a different page. Add its address to the library to take notes on it."); return; }
@@ -768,6 +794,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
           else { saveAnnotation(selection.anchor, "highlight", comment, color, style); closeTip(); window.getSelection()?.removeAllRanges(); }
         }} onDelete={() => { if (selectedAnnotation) changeAnnotations(annotations.filter((item) => item.id !== selectedAnnotation.id)); closeTip(); }}
         onPaper={(paper) => { if (selectedAnnotation) changeAnnotations(annotations.map((item) => item.id === selectedAnnotation.id ? { ...item, paper } : item)); }}
+        diveId={selectedAnnotation ? linkedDiveId(selectedAnnotation.id) : undefined} onOpenDive={openSavedDive}
         onDive={() => dive(selection.anchor)} onAddToQuestion={() => addToQuestion(selection.anchor)}
         onPin={() => { const anchor = selection.anchor; void saveNotebookExcerpt(notebook, anchorText(model, anchor), { locationLabel: anchorLabel(model, anchor), position: engine.unitForAnchor(anchor), native: { id: crypto.randomUUID(), kind: "highlight", anchor, text: anchorText(model, anchor), comment: "", color: pen.color, style: pen.style, createdAt: new Date().toISOString() } }); closeTip(); }}
         onGlossary={() => { const id = addGlossaryTerm(glossary, anchorText(model, selection.anchor), engine.unitForAnchor(selection.anchor), glossaryContext()); if (id) setTipGlossaryId(id); }} />}
@@ -775,8 +802,9 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   </div></NotebookProvider>;
 }
 
-function NativeSelectionTip({ onOpenNote, annotation, text, pen, onSave, onDelete, onPaper, onDive, onAddToQuestion, onPin, onGlossary }: {
+function NativeSelectionTip({ onOpenNote, annotation, text, pen, onSave, onDelete, onPaper, diveId, onOpenDive, onDive, onAddToQuestion, onPin, onGlossary }: {
   onOpenNote: () => void; annotation?: DocumentAnnotation; text: string; pen: HighlightPen;
+  diveId?: string; onOpenDive: (id: string) => void;
   onSave: (comment: string, color: string, style: DocumentAnnotation["style"]) => void;
   onDelete: () => void; onPaper: (paper: string) => void; onDive: () => void; onAddToQuestion: () => void; onPin: () => void; onGlossary: () => void;
 }) {
@@ -785,7 +813,7 @@ function NativeSelectionTip({ onOpenNote, annotation, text, pen, onSave, onDelet
   const ref = useRef<HTMLDivElement>(null);
   const note = { panel: null, button: <button type="button" className="TextHighlight__comment-button" onClick={onOpenNote}>Note</button> };
   return <div ref={ref} className="flow-selection-tip">
-    <HighlightToolbar copyText={text} note={note} onStartDive={onDive} onAddToQuestion={onAddToQuestion}
+    <HighlightToolbar copyText={text} note={note} divePanelId={diveId} onOpenDive={onOpenDive} onStartDive={onDive} onAddToQuestion={onAddToQuestion}
       onAddToGlossary={text ? onGlossary : undefined} glossaryDisabledReason={isGlossaryCandidate(text) ? undefined : "Select a term of up to eight words"}
       onPin={!annotation ? onPin : undefined} onDelete={annotation ? onDelete : undefined}
       activeStyle={style} onStyleChange={isSticker ? undefined : (next) => { setStyle(next); if (annotation) onSave(annotation.comment, annotation.color, next); }}

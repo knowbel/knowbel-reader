@@ -16,8 +16,11 @@ export function renderSources(sources: SourceRef[], pageLabel: (pageNumber: numb
     .join("\n");
 }
 
-export const SOURCE_RULES = `- After each claim taken from a source, cite it by id: [S2] (several: [S2][S5]). For something you reasoned from the sources rather than read there: [inferred: S2]. For anything from outside the sources: [general].
-- Quote the document only word for word, in quotation marks, followed by its citation — prose only; never quote a formula (write it in LaTeX instead).
+export const CITATION_RULES = `- Cite document claims by source id: [S2] (several: [S2][S5]). One citation at the end of a paragraph or list item can cover nearby claims supported by the same passage. Cite separately when the supporting passage changes.
+- Mark inferences from the document with [inferred: S2] and outside knowledge with [general].
+- Quote only when the original wording matters. Quote prose word for word, in quotation marks, with its own citation. Write formulas in LaTeX.`;
+
+export const SOURCE_RULES = `${CITATION_RULES}
 - Never cite an id that isn't listed above.
 - If the sources don't address the question at all, reply only "[not-covered]" and one sentence saying so.`;
 
