@@ -10,6 +10,13 @@ export interface FetchedResource {
   bytes: Uint8Array;
 }
 
+export interface RenderedArticlePage {
+  url: string;
+  title?: string;
+  html: string;
+  contentType?: string;
+}
+
 // Gets bytes off the web. The app's implementation goes through its own
 // server (fetcher.ts), since other sites don't let the page fetch them
 // directly; a headless browser could stand in for it.
@@ -74,4 +81,6 @@ export interface ImportProgress {
 }
 
 // A failure worth showing the reader as it is.
-export class WebImportError extends Error {}
+export class WebImportError extends Error {
+  browserRecommended = false;
+}

@@ -65,6 +65,33 @@ async function shrink(bytes: Uint8Array, kind: Kind): Promise<{ bytes: Uint8Arra
 
 const EXTENSIONS: Record<string, string> = { jpeg: "jpg", png: "png", gif: "gif", webp: "webp", svg: "svg", avif: "avif", bmp: "bmp", ico: "ico", other: "img" };
 
+// Native sources embed raster images so they reopen without the network.
+// SVG is decoded as an image, never inserted into the application's DOM.
+export async function rasterizeImage(bytes: Uint8Array, contentType: string): Promise<Uint8Array | null> {
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: contentType }));
+  try {
+    const image = new Image();
+    const loaded = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 10_000);
+      const finish = (ok: boolean) => { clearTimeout(timer); image.onload = null; image.onerror = null; resolve(ok); };
+      image.onload = () => finish(true);
+      image.onerror = () => finish(false);
+      image.src = url;
+    });
+    if (!loaded || !image.naturalWidth || !image.naturalHeight) return null;
+    const scale = Math.min(1, MAX_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  } catch { return null; }
+  finally { URL.revokeObjectURL(url); }
+}
+
 export async function saveImages(
   content: HTMLElement,
   options: {
@@ -73,6 +100,7 @@ export async function saveImages(
     files: Map<string, Uint8Array>;
     report: ImportReport;
     signal?: AbortSignal;
+    native?: boolean;
     onProgress?: (done: number, total: number) => void;
   },
 ): Promise<void> {
@@ -81,27 +109,35 @@ export async function saveImages(
   const byUrl = new Map<string, HTMLImageElement[]>();
   for (const img of content.querySelectorAll("img")) {
     const src = img.getAttribute("src") ?? "";
-    if (!/^(https?:|data:)/i.test(src)) continue;
+    if (files.has(src) || (!options.native && !/^(https?:|data:)/i.test(src))) continue;
     byUrl.set(src, [...(byUrl.get(src) ?? []), img]);
   }
   const urls = [...byUrl.keys()];
   let done = 0;
   let next = 0;
-  let counter = 0;
+  const indices = new Map(urls.map((url, index) => [url, index + 1]));
   options.onProgress?.(0, urls.length);
 
+  const normalize = async (bytes: Uint8Array, kind: Kind, contentType: string): Promise<{ bytes: Uint8Array; kind: Kind } | null> => {
+    if (options.native && !["png", "jpeg", "gif", "webp"].includes(kind)) {
+      const png = await rasterizeImage(bytes, contentType);
+      return png ? { bytes: png, kind: "png" } : null;
+    }
+    return shrink(bytes, kind);
+  };
   const fetchOne = async (url: string): Promise<{ bytes: Uint8Array; kind: Kind } | null> => {
     if (/^data:/i.test(url)) {
       const decoded = decodeDataUrl(url);
       if (!decoded) return null;
       const kind = kindOf(decoded.bytes, decoded.contentType);
-      return kind ? { bytes: decoded.bytes, kind } : null;
+      return kind ? normalize(decoded.bytes, kind, decoded.contentType) : null;
     }
+    if (!/^https?:/i.test(url)) return null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const resource = await fetcher.fetch(url, { purpose: "asset", referer: pageUrl, signal });
         const kind = kindOf(resource.bytes, resource.contentType);
-        return kind ? shrink(resource.bytes, kind) : null;
+        return kind ? normalize(resource.bytes, kind, kind === "svg" ? "image/svg+xml" : resource.contentType) : null;
       } catch (error) {
         if (signal?.aborted) throw error;
       }
@@ -115,7 +151,7 @@ export async function saveImages(
       const saved = await fetchOne(url);
       const images = byUrl.get(url)!;
       if (saved) {
-        const path = `images/${String(++counter).padStart(3, "0")}.${EXTENSIONS[saved.kind] ?? "img"}`;
+        const path = `images/${String(indices.get(url)).padStart(3, "0")}.${EXTENSIONS[saved.kind] ?? "img"}`;
         files.set(path, saved.bytes);
         for (const img of images) img.setAttribute("src", path);
         report.imagesSaved += 1;
@@ -131,13 +167,13 @@ export async function saveImages(
           note.setAttribute("data-kr-missing", "");
           note.append(`Picture not saved${alt ? ` (${alt})` : ""} — `);
           const link = doc.createElement("a");
-          link.setAttribute("href", /^data:/i.test(url) ? pageUrl : url);
+          link.setAttribute("href", /^https?:/i.test(url) ? url : pageUrl);
           link.textContent = "view it on the web";
           note.append(link);
           img.replaceWith(note);
         });
         if (thumbnails.some((thumbnail) => !thumbnail)) {
-          report.imagesFailed.push({ url, alt: (images[0].getAttribute("alt") ?? "").trim() });
+          report.imagesFailed.push({ url: /^https?:/i.test(url) ? url : pageUrl, alt: (images[0].getAttribute("alt") ?? "").trim() });
         }
       }
       done += 1;

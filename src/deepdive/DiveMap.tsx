@@ -54,7 +54,7 @@ export default function DiveMap({
                   >
                     <span className="dive-map-label">{panel.label || "Selected region"}</span>
                     <span className="dive-map-meta">
-                      {depth === 0 && panel.pageNumber !== undefined ? `p. ${pageLabel(panel.pageNumber)} · ` : ""}
+                      {depth === 0 && panel.pageNumber !== undefined ? `${panel.locationLabel || `p. ${pageLabel(panel.pageNumber)}`} · ` : ""}
                       {answers} answer{answers === 1 ? "" : "s"}
                     </span>
                   </button>

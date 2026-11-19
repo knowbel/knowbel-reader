@@ -1,5 +1,4 @@
-import type { PDFDocumentProxy } from "pdfjs-dist";
-import { getSections, getTextIndex } from "../text/documentText";
+import { getSections, getTextIndex, isTextProvider, type TextDocument } from "../text/documentText";
 import { collectTargets, findPageRefs, type XrefRef, type XrefTarget, type XrefTargets } from "./detect";
 import { readLinkRefs } from "./links";
 
@@ -12,12 +11,12 @@ export interface XrefIndex {
   targets: XrefTargets; // every numbered thing and bibliography entry found
 }
 
-const cache = new WeakMap<PDFDocumentProxy, Promise<XrefIndex>>();
+const cache = new WeakMap<TextDocument, Promise<XrefIndex>>();
 
-async function build(pdf: PDFDocumentProxy): Promise<XrefIndex> {
+async function build(pdf: TextDocument): Promise<XrefIndex> {
   const [index, sections] = await Promise.all([getTextIndex(pdf), getSections(pdf).catch(() => [])]);
   const targets = collectTargets(index.pages, sections);
-  const links = await readLinkRefs(pdf, index, targets).catch(() => ({ refs: [], byAnnotation: new Map() }));
+  const links = isTextProvider(pdf) ? { refs: [], byAnnotation: new Map<string, XrefTarget>() } : await readLinkRefs(pdf, index, targets).catch(() => ({ refs: [], byAnnotation: new Map() }));
 
   const refsByPage = new Map<number, XrefRef[]>();
   for (const ref of links.refs) {
@@ -36,7 +35,7 @@ async function build(pdf: PDFDocumentProxy): Promise<XrefIndex> {
   return { refsByPage, byAnnotation: links.byAnnotation, targets };
 }
 
-export function getXrefIndex(pdf: PDFDocumentProxy): Promise<XrefIndex> {
+export function getXrefIndex(pdf: TextDocument): Promise<XrefIndex> {
   let index = cache.get(pdf);
   if (!index) {
     index = build(pdf);

@@ -80,6 +80,7 @@ function sameLine(a: IndexedPage["items"][number], b: IndexedPage["items"][numbe
 // Whether the character at `index` begins its line — the first character of
 // the first text run on that line (ignoring leading spaces).
 function startsLine(page: IndexedPage, index: number): boolean {
+  if (page.canonical) return !page.text.slice(page.text.lastIndexOf("\n", index - 1) + 1, index).trim();
   const itemIndex = page.charItem[index];
   if (itemIndex === undefined || itemIndex < 0) return false;
   const item = page.items[itemIndex];
@@ -147,6 +148,11 @@ export function findPageTargets(page: IndexedPage): XrefTarget[] {
     if (!found || !isTheoremOrCaption(found.env) || !startsLine(page, match.index)) continue;
     const itemIndex = page.charItem[match.index];
     const item = page.items[itemIndex];
+    if (!item && page.canonical) {
+      targets.push({ kind: kindOf(found.env), key: `${found.env}:${match[2]}`, name: `${found.display} ${match[2]}`, pageNumber: page.pageNumber,
+        top: 0, bottom: 1, range: [match.index, match.index + match[0].length] });
+      continue;
+    }
     const height = lineHeight(page, itemIndex);
     let top = item.rect.top - height * 0.5;
     let bottom: number;
@@ -171,6 +177,13 @@ export function findPageTargets(page: IndexedPage): XrefTarget[] {
     });
   }
 
+  if (page.canonical) {
+    for (const match of page.text.matchAll(new RegExp(`\\((${NUMBER})\\)\\s*$`, "gm"))) {
+      const line = page.text.slice(page.text.lastIndexOf("\n", match.index - 1) + 1, match.index);
+      if (line.trim() && !/[=\\]/.test(line)) continue;
+      targets.push({ kind: "equation", key: `equation:${match[1]}`, name: `Eq. (${match[1]})`, pageNumber: page.pageNumber, top: 0, bottom: 1, range: [match.index, match.index + match[0].trimEnd().length] });
+    }
+  }
   // "(3.2)" alone at the right end of its line: an equation number.
   page.items.forEach((item, itemIndex) => {
     const label = EQUATION_LABEL.exec(item.text.trim());

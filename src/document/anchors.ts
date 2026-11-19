@@ -1,4 +1,4 @@
-import type { FlowAnchor, FlowDocument, TextAnchor, TextPoint } from "./model.ts";
+import type { FlowAnchor, FlowDocument, FlowNode, TextAnchor, TextPoint } from "./model.ts";
 
 export interface BlockRange { blockId: string; start: number; end: number }
 
@@ -14,6 +14,21 @@ function lookup(document: FlowDocument) {
 }
 
 export function blockIndices(document: FlowDocument) { return lookup(document).indices; }
+
+export function fragmentAnchor(document: FlowDocument, fragment: string): TextAnchor | null {
+  let id = fragment.replace(/^#/, "");
+  try { id = decodeURIComponent(id); } catch { /* use the literal fragment */ }
+  const find = (node: FlowNode): Extract<FlowNode, { type: "element" }> | undefined => {
+    if (node.type !== "element") return;
+    if (node.id === id) return node;
+    for (const child of node.children) { const target = find(child); if (target) return target; }
+  };
+  for (const block of document.blocks) {
+    const target = find(block.content);
+    if (target) return textAnchor(document, { blockId: block.id, offset: target.start ?? 0 }, { blockId: block.id, offset: target.end ?? block.text.length });
+  }
+  return null;
+}
 
 export function anchorRanges(document: FlowDocument, anchor: FlowAnchor): BlockRange[] {
   if (anchor.kind === "object") {

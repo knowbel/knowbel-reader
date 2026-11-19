@@ -118,6 +118,7 @@ window.__seed = new Promise((resolve, reject) => {
     const db = request.result;
     const transaction = db.transaction(['documents', 'files'], 'readwrite');
     for (const fixture of \(fixturesJSON)) {
+      if (fixture.urlImport) continue;
       transaction.objectStore('documents').put(fixture.meta);
       transaction.objectStore('files').put(new Uint8Array(fixture.bytes), fixture.meta.docId);
     }
@@ -134,6 +135,26 @@ window.__seed.then(() => location.reload()); undefined;
     let fixture = fixtures[index]
     let meta = fixture["meta"] as! [String: Any]
     if !opened && state["library"] as? Bool == true {
+      if let urlImport = fixture["urlImport"] as? [String: String] {
+        opened = true
+        let literal = String(data: try! JSONSerialization.data(withJSONObject: urlImport), encoding: .utf8)!
+        view.evaluateJavaScript("""
+(async () => {
+  const fixture = \(literal), originalFetch = window.fetch;
+  window.fetch = async (url, options) => String(url).includes('/api/web/fetch')
+    ? new Response(fixture.html, {headers: {'Content-Type':'text/html','x-final-url':fixture.url}})
+    : originalFetch(url, options);
+  [...document.querySelectorAll('.library-add')].find(button=>button.textContent.includes('Add from URL')).click();
+  for (let i=0;i<200 && !document.querySelector('.url-dialog-input');i++) await new Promise(resolve=>setTimeout(resolve,20));
+  const input=document.querySelector('.url-dialog-input');
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,fixture.url);
+  input.dispatchEvent(new Event('input',{bubbles:true}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  document.querySelector('.url-dialog form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+})().catch(error=>window.webkit.messageHandlers.errors.postMessage(String(error))); undefined;
+""") { _, error in if let error = error { print("FAIL:", error); exit(1) } }
+        return
+      }
       let title = meta["title"] as! String
       let literal = String(data: try! JSONSerialization.data(withJSONObject: ["Open “\(title)”"]), encoding: .utf8)!
       opened = true
@@ -145,7 +166,7 @@ window.__seed.then(() => location.reload()); undefined;
     let native = fixture["native"] as! Bool
     let rendered = native ? state["native"] as? Bool == true : state["canvas"] as? Bool == true && state["controls"] as? Bool == true
     if opened && rendered && state["annotations"] as? Bool == true && (state["body"] as? String ?? "").contains(fixture["expect"] as! String) {
-      if native && state["core"] as? Bool == true { print("FAIL: Markdown loaded PDF.js"); exit(1) }
+      if native && state["core"] as? Bool == true { print("FAIL: Native reader loaded PDF.js"); exit(1) }
       if !notebookCheckStarted {
         notebookCheckStarted = true
         let question = String(data: try! JSONSerialization.data(withJSONObject: ["Explain " + (fixture["expect"] as! String)]), encoding: .utf8)!

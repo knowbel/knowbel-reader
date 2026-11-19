@@ -102,7 +102,7 @@ export interface OpenedDocument {
 // A file name without its extension: the title a document starts with, and
 // the base of an exported copy's name.
 export function titleFromFileName(fileName: string): string {
-  return fileName.replace(/\.(pdf|epub|md|markdown|html?)$/i, "") || fileName;
+  return fileName.replace(/\.(pdf|epub|md|markdown|html?|xhtml)$/i, "") || fileName;
 }
 
 // Adds the PDF to the library if it isn't there yet — or brings back its

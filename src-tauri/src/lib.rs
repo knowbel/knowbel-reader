@@ -1,6 +1,7 @@
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent};
+mod browser;
 
 // Holds the child process for the bundled Deep Dive API server (see
 // scripts/build-server.mjs) so it can be killed when the app exits.
@@ -53,7 +54,8 @@ fn key_entry(provider: &str) -> Result<keyring::Entry, String> {
 }
 
 #[tauri::command]
-fn get_api_key(provider: String) -> Result<Option<String>, String> {
+fn get_api_key(window: tauri::Webview, provider: String) -> Result<Option<String>, String> {
+  browser::trusted(&window)?;
   match key_entry(&provider)?.get_password() {
     Ok(key) => Ok(Some(key)),
     Err(keyring::Error::NoEntry) => Ok(None),
@@ -62,7 +64,8 @@ fn get_api_key(provider: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn set_api_key(provider: String, key: String) -> Result<(), String> {
+fn set_api_key(window: tauri::Webview, provider: String, key: String) -> Result<(), String> {
+  browser::trusted(&window)?;
   let key = key.trim();
   if key.is_empty() {
     return Err("The key is empty.".into());
@@ -71,7 +74,8 @@ fn set_api_key(provider: String, key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_api_key(provider: String) -> Result<(), String> {
+fn delete_api_key(window: tauri::Webview, provider: String) -> Result<(), String> {
+  browser::trusted(&window)?;
   match key_entry(&provider)?.delete_credential() {
     Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
     Err(err) => Err(err.to_string()),
@@ -101,13 +105,15 @@ fn migrate_legacy_library(app: &tauri::AppHandle) {
 pub fn run() {
   tauri::Builder::default()
     .manage(ServerProcess(Mutex::new(None)))
+    .manage(browser::PageState::default())
     // The document library lives in plain files under the app data folder
     // (src/storage/desktop.ts); capabilities/default.json scopes access to
     // $APPDATA/library.
     .plugin(tauri_plugin_fs::init())
     // "Show in Finder" for a document's folder in the library.
     .plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![get_api_key, set_api_key, delete_api_key])
+    .invoke_handler(tauri::generate_handler![get_api_key, set_api_key, delete_api_key,
+      browser::open_import_browser, browser::import_browser_action, browser::capture_import_browser, browser::position_import_browser, browser::read_page_selection, browser::read_page_interaction, browser::decorate_page, browser::print_reader, browser::save_page_archive, browser::load_page_archive])
     .setup(|app| {
       migrate_legacy_library(app.handle());
       if cfg!(debug_assertions) {

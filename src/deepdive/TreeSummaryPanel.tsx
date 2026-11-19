@@ -65,7 +65,7 @@ export default function TreeSummaryPanel({
     <div className="tree-summary" role="dialog" aria-label="Dive summary">
       <header className="tree-summary-header">
         <div className="tree-summary-title">
-          <span className="tree-summary-kicker">Summary{root.pageNumber !== undefined ? ` · p. ${pageLabel(root.pageNumber)}` : ""}</span>
+          <span className="tree-summary-kicker">Summary{root.locationLabel ? ` · ${root.locationLabel}` : root.pageNumber !== undefined ? ` · p. ${pageLabel(root.pageNumber)}` : ""}</span>
           <span className="tree-summary-passage">{root.label || "Selected region"}</span>
         </div>
         <div className="tree-summary-actions">

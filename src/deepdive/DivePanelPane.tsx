@@ -408,7 +408,7 @@ function RootAnchorCard({
       <div className="dive-root-anchor-head">
         <span className="dive-root-anchor-label">
           <Network width={12} height={12} aria-hidden="true" /> Started from
-          {root.pageNumber !== undefined ? ` p. ${pageLabel(root.pageNumber)}` : ""}
+          {root.locationLabel ? ` · ${root.locationLabel}` : root.pageNumber !== undefined ? ` p. ${pageLabel(root.pageNumber)}` : ""}
         </span>
         <button type="button" className="dive-root-anchor-open" onClick={onOpen}>
           Return to passage

@@ -27,6 +27,7 @@ export class ReaderDraftStore {
   private key() { return `knowbel-drafts:${this.docId}`; }
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   get = (id: string) => this.drafts.get(id)?.text ?? "";
+  getRevision = () => this.revision;
   getAttachments = (id: string): Attachment[] => this.drafts.get(id)?.attachments ?? EMPTY_ATTACHMENTS;
   attachmentMap(prefix: string): Record<string, Attachment[]> { return Object.fromEntries([...this.drafts.values()].filter((draft) => draft.id.startsWith(prefix) && draft.attachments?.length).map((draft) => [draft.id.slice(prefix.length), draft.attachments!])); }
   private update(id: string, patch: Partial<ReaderDraft>) {

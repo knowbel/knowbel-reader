@@ -44,7 +44,7 @@ function similar(a: string, b: string): boolean {
 }
 
 export function cleanArticle(content: HTMLElement, title: string): void {
-  for (const el of [...content.querySelectorAll("script, style, noscript, template, link, meta, button, input, select, textarea, dialog, [role=dialog], nav, object, embed, iframe")]) {
+  for (const el of [...content.querySelectorAll("script, style, noscript, template, link, meta, button, input, select, textarea, dialog, [role=dialog], nav, object, embed, iframe:not([data-kr-player])")]) {
     el.remove();
   }
   for (const form of [...content.querySelectorAll("form, label, fieldset")]) form.replaceWith(...[...form.childNodes]);

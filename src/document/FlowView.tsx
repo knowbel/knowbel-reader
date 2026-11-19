@@ -1,18 +1,22 @@
 import { createElement, lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { DocumentAnnotation, DocumentBlock, FlowAnchor, FlowDocument, FlowNode, TextPoint } from "./model.ts";
+import type { DocumentAnnotation, DocumentBlock, FlowAnchor, FlowDocument, FlowNode, FlowReference, TextPoint } from "./model.ts";
 import { safeDocumentUrl } from "./model.ts";
-import { anchorRanges, resolveAnchor, textAnchor } from "./anchors.ts";
-import { pointAt, rangeAt, selectionAnchor } from "./dom.ts";
+import { anchorRanges, fragmentAnchor, resolveAnchor, textAnchor } from "./anchors.ts";
+import { pointAt, pointFromScreen, rangeAt, selectionAnchor } from "./dom.ts";
 import type { AnchorRect } from "../deepdive/useFlippedPlacement";
 import { stickerStyle, STICKER_DEFAULT_PAPER } from "../stickerStyles";
 import { openExternal } from "../library/desktop";
 import { showNotice } from "../components/notices";
+import { createPortal } from "react-dom";
 
 const MathRun = lazy(() => import("./MathRun"));
+const MediaView = lazy(() => import("./MediaView"));
 const EMPTY_MARKS: MarkRange[] = [];
+const EMPTY_REFERENCES: FlowReference[] = [];
 interface MarkRange { start: number; end: number; annotation: DocumentAnnotation }
 export interface FlowSelection { anchor: FlowAnchor; rect: AnchorRect; annotationId?: string }
 export interface FlowGlossaryMark { entryId: string; anchor: FlowAnchor }
+export interface FlowAreaSelection { anchor: FlowAnchor; rect: { left: number; top: number; width: number; height: number } }
 
 function FlowImage({ node, assets }: { node: Extract<FlowNode, { type: "image" }>; assets: Map<string, string> }) {
   const [failed, setFailed] = useState(false);
@@ -31,16 +35,16 @@ function renderNode(node: FlowNode, key: string, marks: MarkRange[], assets: Map
     const objectMark = node.objectId && marks.find((mark) => mark.annotation.anchor.kind === "object" && mark.annotation.anchor.objectId === node.objectId);
     return createElement(node.tag, { key, id: node.id, href: node.href ? safeDocumentUrl(node.href) ?? undefined : undefined,
       "data-annotation-id": objectMark ? objectMark.annotation.id : undefined, className: objectMark ? "flow-object-mark" : undefined,
-      start: node.tag === "ol" ? node.order : undefined, "data-reader-object": node.objectId }, ...children);
+      start: node.tag === "ol" ? node.order : undefined, colSpan: node.colSpan, rowSpan: node.rowSpan, "data-reader-object": node.objectId }, ...children);
   }
   const value = node.type === "image" ? node.alt : node.value;
   const common = { "data-reader-run": true, "data-reader-start": node.start, "data-reader-length": value.length };
-  if (node.type === "math" || node.type === "image") {
+  if (node.type === "math" || node.type === "image" || node.type === "media") {
     const mark = marks.find((mark) => (mark.end > node.start && mark.start < node.start + value.length) ||
       (node.type === "image" && mark.annotation.anchor.kind === "object" && mark.annotation.anchor.objectId === node.objectId));
     const glossaryId = mark?.annotation.id.startsWith("glossary:") ? mark.annotation.id.slice(9) : undefined;
     return <span key={key} {...common} data-reader-atomic="true" data-annotation-id={glossaryId ? undefined : mark?.annotation.id} data-glossary-id={glossaryId} className={mark ? "flow-atomic-mark" : undefined}>
-      {node.type === "math" ? <Suspense fallback={<code>{value}</code>}><MathRun value={value} display={node.display} /></Suspense> : <FlowImage node={node} assets={assets} />}
+      {node.type === "math" ? <Suspense fallback={<code>{value}</code>}><MathRun value={value} display={node.display} /></Suspense> : node.type === "media" ? <Suspense fallback={<span>{value}</span>}><MediaView node={node} /></Suspense> : <FlowImage node={node} assets={assets} />}
     </span>;
   }
   const relevant = marks.filter((mark) => mark.start < node.start + value.length && mark.end > node.start);
@@ -52,7 +56,8 @@ function renderNode(node: FlowNode, key: string, marks: MarkRange[], assets: Map
     if (!mark) return value.slice(start, end);
     const { annotation } = mark;
     const glossaryId = annotation.id.startsWith("glossary:") ? annotation.id.slice(9) : undefined;
-    return <mark key={start} data-annotation-id={glossaryId ? undefined : annotation.id} data-glossary-id={glossaryId}
+    const referenceId = annotation.id.startsWith("xref:") ? annotation.id.slice(5) : undefined;
+    return <mark key={start} data-annotation-id={glossaryId || referenceId ? undefined : annotation.id} data-glossary-id={glossaryId} data-xref-id={referenceId}
       className={`flow-mark flow-mark--${annotation.style}${annotation.id === "flash" ? " flow-mark--flash" : ""}${glossaryId ? " flow-mark--glossary" : ""}`}
       style={{ "--mark-color": annotation.color } as CSSProperties}>{value.slice(start, end)}</mark>;
   })}</span>;
@@ -62,15 +67,30 @@ const FlowBlock = memo(function FlowBlock({ block, marks, assets }: { block: Doc
   return <section className="flow-block" data-reader-block={block.id}>{renderNode(block.content, block.id, marks, assets)}</section>;
 });
 
-function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale, notesCollapsed, noteMode, onSelection, onSticker, onPosition, navigate, onNavigate }: {
+export function FlowPreview({ model, anchor }: { model: FlowDocument; anchor: FlowAnchor }) {
+  const [assets, setAssets] = useState(new Map<string, string>());
+  const block = model.blocks.find((block) => block.id === (anchor.kind === "text" ? anchor.start.blockId : anchor.blockId));
+  useEffect(() => {
+    const urls = new Map<string, string>();
+    for (const [path, blob] of model.assets ?? []) urls.set(path, URL.createObjectURL(blob));
+    setAssets(urls); return () => urls.forEach((url) => URL.revokeObjectURL(url));
+  }, [model]);
+  return <div className="flow-preview flow-block">{block ? block.text.length > 5000 ? <p>{block.text.slice(0, 5000)}…</p> : renderNode(block.content, block.id, EMPTY_MARKS, assets) : "This passage is unavailable."}</div>;
+}
+
+function FlowView({ model, annotations, glossaryMarks, onGlossary, references = EMPTY_REFERENCES, onReference, flash, scale, notesCollapsed, noteMode, areaMode = false, onArea, onSelection, onSticker, onPosition, navigate, onNavigate }: {
   model: FlowDocument;
   annotations: DocumentAnnotation[];
   glossaryMarks: FlowGlossaryMark[];
   onGlossary: (entryId: string, rect: AnchorRect) => void;
+  references?: FlowReference[];
+  onReference?: (targets: FlowReference["targets"], rect: AnchorRect) => void;
   flash: FlowAnchor | null;
   scale: number;
   notesCollapsed: boolean;
   noteMode: boolean;
+  areaMode?: boolean;
+  onArea?: (selection: FlowAreaSelection) => void;
   onSelection: (selection: FlowSelection) => void;
   onSticker: (anchor: FlowAnchor) => void;
   onPosition: (point: TextPoint) => void;
@@ -78,6 +98,8 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
   onNavigate: (anchor: FlowAnchor) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; y: number } | null>(null);
+  const [area, setArea] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const positionCallback = useRef(onPosition);
   positionCallback.current = onPosition;
   const [assets, setAssets] = useState(new Map<string, string>());
@@ -92,7 +114,7 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
     const grouped = new Map<string, MarkRange[]>();
     const all = [...(flash ? [{ id: "flash", kind: "highlight", anchor: flash, color: "#8fb0e8", style: "highlight" } as DocumentAnnotation] : []),
       ...annotations, ...glossaryMarks.map((mark) => ({ id: `glossary:${mark.entryId}`, kind: "highlight", anchor: mark.anchor,
-        color: "var(--link)", style: "underline" } as DocumentAnnotation))];
+        color: "var(--link)", style: "underline" } as DocumentAnnotation)), ...references.map((reference) => ({ id: `xref:${reference.id}`, kind: "highlight", anchor: reference.anchor, color: "var(--link)", style: "underline" } as DocumentAnnotation))];
     for (const annotation of all) {
       if (annotation.kind !== "highlight") continue;
       const resolved = resolveAnchor(model, annotation.anchor);
@@ -104,7 +126,8 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
       }
     }
     return grouped;
-  }, [model, annotations, glossaryMarks, flash]);
+  }, [model, annotations, glossaryMarks, references, flash]);
+  const referenceMap = useMemo(() => new Map(references.map((reference) => [reference.id, reference])), [references]);
   const stickers = useMemo(() => {
     const grouped = new Map<string, DocumentAnnotation[]>();
     for (const annotation of annotations) {
@@ -201,7 +224,41 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
   };
 
   return <div ref={rootRef} className={`flow-scroll${noteMode ? " flow-note-mode" : ""}`} tabIndex={0} aria-label={model.title}
+    onPointerDown={(event) => {
+      if (!onArea || (!areaMode && !event.altKey) || event.button !== 0 || (event.target as Element).closest("[data-reader-interactive],button,a")) return;
+      event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); window.getSelection()?.removeAllRanges();
+      drag.current = { x: event.clientX, y: event.clientY }; setArea({ left: event.clientX, top: event.clientY, width: 0, height: 0 });
+    }} onPointerMove={(event) => {
+      if (!drag.current) return;
+      setArea({ left: Math.min(drag.current.x, event.clientX), top: Math.min(drag.current.y, event.clientY), width: Math.abs(event.clientX - drag.current.x), height: Math.abs(event.clientY - drag.current.y) });
+    }} onPointerCancel={() => { drag.current = null; setArea(null); }} onPointerUp={(event) => {
+      const start = drag.current; if (!start || !rootRef.current) return;
+      drag.current = null; setArea(null); event.preventDefault(); event.currentTarget.releasePointerCapture(event.pointerId);
+      const bounds = rootRef.current.getBoundingClientRect();
+      const left = Math.max(bounds.left, Math.min(start.x, event.clientX)), top = Math.max(bounds.top, Math.min(start.y, event.clientY));
+      const right = Math.min(bounds.right, Math.max(start.x, event.clientX)), bottom = Math.min(bounds.bottom, Math.max(start.y, event.clientY));
+      if (right - left < 12 || bottom - top < 12) return;
+      let first = pointFromScreen(rootRef.current, left + 1, top + 1), last = pointFromScreen(rootRef.current, right - 1, bottom - 1, true);
+      if (!first) {
+        const block = document.elementFromPoint((left + right) / 2, (top + bottom) / 2)?.closest<HTMLElement>("[data-reader-block]");
+        if (block?.dataset.readerBlock) first = { blockId: block.dataset.readerBlock, offset: 0 };
+      }
+      if (!first) return;
+      last ??= first;
+      const a = model.blocks.findIndex((block) => block.id === first!.blockId), b = model.blocks.findIndex((block) => block.id === last!.blockId);
+      if (a > b || a === b && first.offset > last.offset) [first, last] = [last, first];
+      onArea?.({ anchor: textAnchor(model, first, last), rect: { left, top, width: right - left, height: bottom - top } });
+    }}
     onMouseOver={(event) => {
+      const reference = (event.target as Element).closest<HTMLElement>("[data-xref-id],a[href^='#']");
+      if (reference && !(event.relatedTarget instanceof Node && reference.contains(event.relatedTarget))) {
+        const anchor = reference instanceof HTMLAnchorElement ? fragmentAnchor(model, reference.getAttribute("href")!) : null;
+        const targets = anchor ? [{ anchor, label: reference.textContent || "Source passage" }] : referenceMap.get(reference.dataset.xrefId!)?.targets;
+        if (targets?.length) {
+          clearTimeout(hoverTimer.current);
+          hoverTimer.current = setTimeout(() => { if (window.getSelection()?.isCollapsed !== false) { const rect = reference.getBoundingClientRect(); onReference?.(targets, { left: rect.left, top: rect.top, bottom: rect.bottom }); } }, 300);
+        }
+      }
       const term = (event.target as Element).closest<HTMLElement>("[data-glossary-id]");
       if (!term || (event.relatedTarget instanceof Node && term.contains(event.relatedTarget))) return;
       clearTimeout(hoverTimer.current);
@@ -212,10 +269,16 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
       }, 220);
     }} onMouseOut={() => clearTimeout(hoverTimer.current)}
     onMouseUp={capture} onKeyUp={(event) => { if (event.key.startsWith("Arrow") || event.key === "Shift" || (event.key.toLowerCase() === "a" && (event.metaKey || event.ctrlKey))) capture(); }}
-    onContextMenu={(event) => { if ((event.target as Element).closest("[data-reader-block]")) { event.preventDefault(); stickerAt(event.target); } }}
+    onContextMenu={(event) => { if ((event.target as Element).closest("[data-reader-interactive]")) return; if ((event.target as Element).closest("[data-reader-block]")) { event.preventDefault(); stickerAt(event.target); } }}
     onClick={(event) => {
       if (noteMode) { event.preventDefault(); stickerAt(event.target); return; }
       const target = event.target as Element;
+      if (target.closest("[data-reader-interactive]")) return;
+      const reference = target.closest<HTMLElement>("[data-xref-id]");
+      if (reference && window.getSelection()?.isCollapsed !== false) {
+        const targets = referenceMap.get(reference.dataset.xrefId!)?.targets;
+        if (targets?.[0]) { event.preventDefault(); onNavigate(targets[0].anchor); return; }
+      }
       const term = target.closest<HTMLElement>("[data-glossary-id]");
       if (term && window.getSelection()?.isCollapsed !== false) { event.preventDefault(); const rect = term.getBoundingClientRect(); onGlossary(term.dataset.glossaryId!, { left: rect.left, top: rect.top, bottom: rect.bottom }); return; }
       const annotation = target.closest<HTMLElement>("[data-annotation-id]");
@@ -239,11 +302,8 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
       event.preventDefault();
       const href = link.getAttribute("href")!;
       if (href.startsWith("#")) {
-        let slug = href.slice(1);
-        try { slug = decodeURIComponent(slug); } catch { /* use literal fragment */ }
-        const heading = model.outline.find((heading) => heading.id === slug);
-        const block = model.blocks.find((block) => block.id === heading?.blockId);
-        if (block) onNavigate(textAnchor(model, { blockId: block.id, offset: 0 }, { blockId: block.id, offset: block.text.length }));
+        const anchor = fragmentAnchor(model, href);
+        if (anchor) onNavigate(anchor);
       } else if (/^https?:|^mailto:/i.test(href) && safeDocumentUrl(href)) void openExternal(href);
       else showNotice("This link refers to a file outside the imported document.");
     }}>
@@ -257,6 +317,7 @@ function FlowView({ model, annotations, glossaryMarks, onGlossary, flash, scale,
           </button>)}</div>
       </div>) : <p className="sidebar-empty">This document is empty.</p>}
     </article>
+    {area ? createPortal(<div className="flow-area-selection" style={area} />, document.body) : null}
   </div>;
 }
 

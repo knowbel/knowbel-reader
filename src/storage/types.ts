@@ -46,6 +46,9 @@ export interface ReadingView {
   panel: string | null; // the sidebar panel open, if any
   notebookOpen?: boolean;
   threadId?: string | null; // native reader's open study thread
+  nativeDiveFocus?: string | null;
+  pageMode?: boolean;
+  pageScroll?: number;
 }
 
 export interface DocumentMeta {
@@ -74,7 +77,7 @@ export interface DocumentMeta {
 
 export interface DocumentSource {
   kind: "web";
-  // "article": a web page, saved as a PDF of its text and pictures;
+  // "article": a web page, saved as native HTML (PDF in older libraries);
   // "pdf" / "epub": a file the address led straight to.
   format: "article" | "pdf" | "epub";
   url: string; // as the reader gave it
@@ -83,6 +86,8 @@ export interface DocumentSource {
   siteName?: string;
   publishedAt?: string; // as the page states it (ISO when it can be read as a date)
   fetchedAt: string; // ISO
+  // When the original page was last saved for offline replay (desktop).
+  pageArchivedAt?: string;
 }
 
 export interface LibraryStorage {
@@ -94,4 +99,8 @@ export interface LibraryStorage {
   getData<T>(docId: string, kind: DocDataKind): Promise<T | null>;
   putData(docId: string, kind: DocDataKind, value: unknown): Promise<void>;
   removeDocument(docId: string): Promise<void>;
+  // The original web page as a WebKit archive (desktop only). It can be
+  // replaced by a newer capture and isn't part of notes backups.
+  getPageArchive?(docId: string): Promise<Uint8Array | null>;
+  putPageArchive?(docId: string, bytes: Uint8Array): Promise<void>;
 }

@@ -5,13 +5,14 @@
 export type DocumentFormat = "pdf" | "markdown" | "html" | "epub";
 export type FlowTag = "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "strong" | "em" | "del"
   | "a" | "code" | "pre" | "blockquote" | "ul" | "ol" | "li" | "table" | "thead" | "tbody"
-  | "tr" | "th" | "td" | "hr" | "br" | "section" | "sup" | "sub" | "figure" | "figcaption" | "caption" | "dl" | "dt" | "dd";
+  | "tr" | "th" | "td" | "hr" | "br" | "section" | "span" | "sup" | "sub" | "figure" | "figcaption" | "caption" | "dl" | "dt" | "dd";
 
 export type FlowNode =
   | { type: "text"; value: string; start: number }
-  | { type: "element"; tag: FlowTag; children: FlowNode[]; href?: string; id?: string; order?: number; checked?: boolean; objectId?: string; start?: number; end?: number }
+  | { type: "element"; tag: FlowTag; children: FlowNode[]; href?: string; id?: string; order?: number; checked?: boolean; colSpan?: number; rowSpan?: number; objectId?: string; start?: number; end?: number }
   | { type: "math"; value: string; display: boolean; start: number }
-  | { type: "image"; src: string; alt: string; title?: string; start: number; objectId?: string };
+  | { type: "image"; src: string; alt: string; title?: string; start: number; objectId?: string }
+  | { type: "media"; kind: "video" | "audio" | "embed"; src: string; value: string; poster?: string; start: number; objectId?: string };
 
 export interface DocumentBlock {
   id: string;
@@ -23,7 +24,7 @@ export interface DocumentBlock {
 
 export interface DocumentObject {
   id: string;
-  kind: "image" | "table";
+  kind: "image" | "table" | "video" | "audio" | "embed";
   blockId: string;
   label: string;
   start: number;
@@ -61,6 +62,7 @@ export interface TextAnchor {
 }
 export interface ObjectAnchor { kind: "object"; blockId: string; objectId: string }
 export type FlowAnchor = TextAnchor | ObjectAnchor;
+export interface FlowReference { id: string; anchor: FlowAnchor; targets: { anchor: FlowAnchor; label: string }[] }
 export type DocumentAnchor = FlowAnchor | { kind: "pdf"; pageNumber: number; start: number; end: number };
 
 export interface DocumentAnnotation {

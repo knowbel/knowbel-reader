@@ -253,7 +253,7 @@ export default function LibraryHome({
           <option value="added">Recently added</option>
           <option value="title">Title</option>
         </select>
-        <button type="button" className="library-add" onClick={() => fileInputRef.current?.click()} title="Add PDFs, EPUBs or Markdown (⌘O)">
+        <button type="button" className="library-add" onClick={() => fileInputRef.current?.click()} title="Add PDFs, EPUBs, Markdown or HTML (⌘O)">
           <Plus width={16} height={16} /> Add books
         </button>
         <button
@@ -338,7 +338,7 @@ export default function LibraryHome({
             <Plus width={28} height={28} />
             <span className="library-empty-title">Add your first document</span>
             <span className="library-empty-hint">
-              Drop PDFs, EPUBs or Markdown anywhere here, or click to choose files. To save a web page, paste its link.
+              Drop PDFs, EPUBs, Markdown or HTML anywhere here, or click to choose files. To save a web page, paste its link.
             </span>
           </button>
         ) : (
@@ -369,7 +369,7 @@ export default function LibraryHome({
 
       {dragging ? (
         <div className="library-drop-overlay" aria-hidden="true">
-          Drop PDFs, EPUBs, Markdown or links to add them
+          Drop PDFs, EPUBs, Markdown, HTML or links to add them
         </div>
       ) : null}
 

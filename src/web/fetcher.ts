@@ -18,11 +18,15 @@ export function serverFetcher(): WebFetcher {
         response = await fetch(endpoint({ url, purpose, ...(referer ? { referer } : {}) }), { signal });
       } catch (error) {
         if (signal?.aborted) throw error;
-        throw new WebImportError("Couldn't reach Knowbel's server to fetch the page.");
+        const failure = new WebImportError("Couldn't reach Knowbel's server to fetch the page.");
+        failure.browserRecommended = purpose === "page";
+        throw failure;
       }
       if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new WebImportError(data.error || `The page couldn't be fetched (${response.status}).`);
+        const data = (await response.json().catch(() => ({}))) as { error?: string; upstreamStatus?: number };
+        const error = new WebImportError(data.error || `The page couldn't be fetched (${response.status}).`);
+        error.browserRecommended = [401, 403, 429].includes(data.upstreamStatus ?? response.status) || purpose === "page" && response.status >= 500;
+        throw error;
       }
       return {
         url,

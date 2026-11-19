@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Globe, X } from "lucide-react";
 import type { DocumentMeta, LibraryStorage } from "../storage/types.ts";
-import { WebImportError, type ImportProgress, type ImportReport } from "./types.ts";
+import { WebImportError, type ImportProgress, type ImportReport, type RenderedArticlePage } from "./types.ts";
 import { parseUserUrl } from "./url.ts";
+import { canRevealFiles, openExternal } from "../library/desktop";
+
+const EmbeddedPage = lazy(() => import("./EmbeddedPage"));
 
 // "Add from URL": asks for an address, shows the import's progress, and
 // says plainly what couldn't be kept exactly as it was on the page (a
@@ -11,6 +14,7 @@ import { parseUserUrl } from "./url.ts";
 
 type State =
   | { kind: "form"; error?: string }
+  | { kind: "browser"; error?: string; captured?: RenderedArticlePage }
   | { kind: "working"; progress: ImportProgress }
   | { kind: "choosePdf"; title: string; pdfUrl: string }
   | { kind: "done"; meta: DocumentMeta; report: ImportReport }
@@ -69,8 +73,8 @@ function ReportList({ report }: { report: ImportReport }) {
         <li>
           {plural(report.imagesFailed.length, "picture")} couldn't be downloaded. A note with a link marks each one's place:
           <ul>
-            {report.imagesFailed.slice(0, 6).map((image) => (
-              <li key={image.url}>
+            {report.imagesFailed.slice(0, 6).map((image, index) => (
+              <li key={`${image.url}/${index}`}>
                 <a href={image.url} target="_blank" rel="noreferrer">
                   {image.alt || image.url.replace(/^https?:\/\//, "").slice(0, 80)}
                 </a>
@@ -85,7 +89,7 @@ function ReportList({ report }: { report: ImportReport }) {
       ) : null}
       {media.map(([kind, count]) => (
         <li key={kind}>
-          {plural(count, MEDIA_WORDS[kind as keyof typeof MEDIA_WORDS])} {count === 1 ? "is" : "are"} saved as a link, since a PDF can't play {count === 1 ? "it" : "them"}.
+          {plural(count, MEDIA_WORDS[kind as keyof typeof MEDIA_WORDS])} {count === 1 ? "is" : "are"} saved as a link to open on the original site.
         </li>
       ))}
       {report.mathAsTex > 0 ? <li>{plural(report.mathAsTex, "formula", "formulas")} {report.mathAsTex === 1 ? "is" : "are"} shown as TeX source.</li> : null}
@@ -116,14 +120,44 @@ export default function AddFromUrlDialog({
   const controllerRef = useRef<AbortController | null>(null);
   const pdfChoiceRef = useRef<((takePdf: boolean) => void) | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const browserOpen = useRef(false);
+  const mounted = useRef(true);
+  const capturing = useRef(false), importing = useRef(false);
+  const pageOwner = useRef("import-" + crypto.randomUUID());
+  const handoff = useRef(false), captureAttempts = useRef(0);
+  const captureTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const start = async (force = false) => {
+  const browse = async () => {
+    if (!parseUserUrl(url)) { setState({ kind: "form", error: "Enter a web address first." }); return; }
+    browserOpen.current = true;
+    setState({ kind: "browser" });
+  };
+  const capture = async (automatic = false) => {
+    if (!mounted.current || !browserOpen.current || capturing.current || importing.current) return;
+    capturing.current = true;
+    try {
+      const { captureImportBrowser } = await import("./browser.ts");
+      const captured = await captureImportBrowser(pageOwner.current);
+      if (mounted.current) await start(true, captured);
+    } catch (error) {
+      if (automatic && ++captureAttempts.current < 8) captureTimer.current = setTimeout(() => void capture(true), 2000);
+      else if (mounted.current) setState({ kind: "browser", error: String(error) });
+    } finally { capturing.current = false; }
+  };
+  const pageReady = () => {
+    clearTimeout(captureTimer.current);
+    captureTimer.current = setTimeout(() => void capture(true), 1200);
+  };
+
+  const start = async (force = false, renderedPage?: RenderedArticlePage) => {
+    if (importing.current) return;
     if (!parseUserUrl(url)) {
       setState({ kind: "form", error: "Enter a web address, like https://example.com/article." });
       return;
     }
     controllerRef.current?.abort();
     const controller = new AbortController();
+    importing.current = true;
     controllerRef.current = controller;
     setState({ kind: "working", progress: { stage: "checking" } });
     try {
@@ -131,6 +165,7 @@ export default function AddFromUrlDialog({
       const result = await addFromUrl(storage, url, {
         signal: controller.signal,
         force,
+        renderedPage,
         onProgress: (progress) => {
           if (!controller.signal.aborted) setState({ kind: "working", progress });
         },
@@ -147,25 +182,35 @@ export default function AddFromUrlDialog({
         return;
       }
       onChanged();
-      if (result.report && hasNotes(result.report)) setState({ kind: "done", meta: result.meta, report: result.report });
+      if (renderedPage) { handoff.current = true; onOpen(result.meta); }
+      else if (result.report && hasNotes(result.report)) setState({ kind: "done", meta: result.meta, report: result.report });
       else onOpen(result.meta);
     } catch (error) {
       if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
       if (!(error instanceof WebImportError)) console.error(error); // the others are explained to the reader
-      setState({ kind: "form", error: error instanceof Error && error.message ? error.message : "Couldn't add that page." });
-    }
+      if (!renderedPage && canRevealFiles && error instanceof WebImportError && error.browserRecommended) { void browse(); return; }
+      const message = error instanceof Error && error.message ? error.message : "Couldn't add that page.";
+      setState(renderedPage && browserOpen.current ? { kind: "browser", error: message, captured: renderedPage } : { kind: "form", error: message });
+    } finally { importing.current = false; }
   };
 
   const cancel = () => {
     controllerRef.current?.abort();
+    pdfChoiceRef.current?.(false);
     pdfChoiceRef.current = null;
     onClose();
   };
 
   useEffect(() => {
-    if (autoStart && initialUrl) void start();
+    mounted.current = true;
+    const owner = pageOwner.current;
+    let disposed = false;
+    if (autoStart && initialUrl) queueMicrotask(() => { if (!disposed) void start(); });
     else inputRef.current?.focus();
-    return () => controllerRef.current?.abort();
+    return () => {
+      disposed = true; mounted.current = false; controllerRef.current?.abort(); pdfChoiceRef.current?.(false); pdfChoiceRef.current = null; clearTimeout(captureTimer.current);
+      if (browserOpen.current && !handoff.current) { browserOpen.current = false; void import("./browser.ts").then(({ browserAction }) => browserAction(owner, "close")).catch(() => {}); }
+    };
     // Started once, for the address it opened with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -190,7 +235,7 @@ export default function AddFromUrlDialog({
 
   return (
     <div className="url-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && state.kind !== "working" && cancel()}>
-      <div className="url-dialog" role="dialog" aria-modal="true" aria-labelledby="url-dialog-title">
+      <div className={"url-dialog" + (browserOpen.current ? " url-dialog--page" : "")} role="dialog" aria-modal="true" aria-labelledby="url-dialog-title">
         <header className="url-dialog-header">
           <Globe width={16} height={16} aria-hidden="true" />
           <h2 id="url-dialog-title">Add from URL</h2>
@@ -199,6 +244,7 @@ export default function AddFromUrlDialog({
           </button>
         </header>
 
+        {browserOpen.current ? <Suspense fallback={<p>Loading page…</p>}><EmbeddedPage url={parseUserUrl(url)!.href} owner={pageOwner.current} onReady={pageReady} retainOnUnmount={() => handoff.current} /></Suspense> : null}
         {state.kind === "form" ? (
           <form
             className="url-dialog-body"
@@ -227,6 +273,8 @@ export default function AddFromUrlDialog({
                 {state.error}
               </p>
             ) : null}
+
+            {state.error && parseUserUrl(url) ? <button type="button" className="url-dialog-button" onClick={() => void openExternal(parseUserUrl(url)!.href)}>Open in system browser</button> : null}
             <div className="url-dialog-actions">
               <button type="button" className="url-dialog-button" onClick={cancel}>
                 Cancel
@@ -236,6 +284,18 @@ export default function AddFromUrlDialog({
               </button>
             </div>
           </form>
+        ) : state.kind === "browser" ? (
+          <div className="url-dialog-body">
+            <p>{state.captured ? <><strong>{state.captured.title || "Captured page"}</strong> is ready to add.</> : "The page is open inside Knowbel. Its study copy will be saved automatically. Complete any verification here if requested."}</p>
+            <p className="url-dialog-address">{state.captured?.url || url}</p>
+            {state.error ? <p className="url-dialog-error" role="alert">{state.error}</p> : null}
+            {!state.captured ? <div className="url-dialog-actions">{(["back", "forward", "reload", "focus"] as const).map((action) => <button type="button" className="url-dialog-button" key={action} onClick={() => void import("./browser.ts").then(({ browserAction }) => browserAction(pageOwner.current, action)).catch((error) => setState({ kind: "browser", error: String(error) }))}>{({ back: "Back", forward: "Forward", reload: "Reload", focus: "Focus page" })[action]}</button>)}</div> : null}
+            <div className="url-dialog-actions">
+              <button type="button" className="url-dialog-button" onClick={cancel}>Cancel</button>
+              {state.captured && browserOpen.current ? <button type="button" className="url-dialog-button" onClick={() => void capture(false)}>Read page again</button> : null}
+              <button type="button" className="url-dialog-button is-primary" onClick={() => state.captured ? void start(true, state.captured) : void capture(false)}>{state.captured ? "Add to library" : "Save study copy"}</button>
+            </div>
+          </div>
         ) : state.kind === "working" ? (
           <div className="url-dialog-body">
             <p className="url-dialog-address">{url}</p>

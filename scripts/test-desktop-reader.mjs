@@ -39,6 +39,16 @@ try {
     byteLength: bytes.length, addedAt: "2026-11-04T00:00:00Z", openedAt: "",
     view: { zoom: "auto", twoPage: false, continuous: true, panel: "annotations" },
   }, bytes: Array.from(bytes), expect: "Native Markdown still works.", native: true });
+  const htmlBytes = new TextEncoder().encode('<!doctype html><html><head><title>HTML cold reopen</title></head><body><h1 id="intro">HTML cold reopen</h1><p>Native HTML still works.</p><table><tr><th>Value</th></tr><tr><td>42</td></tr></table></body></html>');
+  fixtures.push({ meta: {
+    docId: createHash("sha256").update(htmlBytes).digest("hex"), title: "HTML cold reopen", fileName: "fixture.html", format: "html",
+    byteLength: htmlBytes.length, addedAt: "2026-11-04T00:00:00Z", openedAt: "",
+    view: { zoom: "auto", twoPage: false, continuous: true, panel: "annotations" },
+  }, bytes: Array.from(htmlBytes), expect: "Native HTML still works.", native: true });
+  fixtures.push({ meta: { title: "URL native import" }, native: true, expect: "Native URL imports work in WebKit.", urlImport: {
+    url: "https://example.invalid/native-article",
+    html: '<!doctype html><html><head><title>URL native import</title></head><body><article><h1>URL native import</h1><p>Native URL imports work in WebKit.</p>'+Array.from({length:8},()=>'<p>This article explains native reading with precise text anchors, persistent notebook writing, source citations, and comfortable typography. It contains enough context for the article extractor to identify its main content.</p>').join('')+'<p>An equation <math><semantics><mi>x</mi><annotation encoding="application/x-tex">x^2</annotation></semantics></math> remains native.</p></article></body></html>',
+  } });
   const fixturePath = join(temporary, "fixtures.json");
   await writeFile(fixturePath, JSON.stringify(fixtures));
   const script = fileURLToPath(new URL("./test-desktop-reader.swift", import.meta.url));

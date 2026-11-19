@@ -1,7 +1,7 @@
 import type { DocumentTextIndex } from "../glossary/textIndex.ts";
 import type { TextProvider } from "../text/documentText.ts";
 import type { Section } from "../text/sections.ts";
-import type { FlowAnchor, FlowDocument } from "./model.ts";
+import type { FlowAnchor, FlowDocument, FlowReference } from "./model.ts";
 import { anchorRanges, blockIndices, textAnchor } from "./anchors.ts";
 
 // One engine per open document. Text and heading indices are derived once,
@@ -13,6 +13,7 @@ export class DocumentEngine implements TextProvider {
   readonly blockIndex: Map<string, number>;
   private textIndex?: Promise<DocumentTextIndex>;
   private sections?: Promise<Section[]>;
+  private references?: Promise<FlowReference[]>;
   readonly document: FlowDocument;
 
   constructor(document: FlowDocument) {
@@ -47,6 +48,21 @@ export class DocumentEngine implements TextProvider {
   }
 
   ranges(anchor: FlowAnchor) { return anchorRanges(this.document, anchor); }
+
+  getReferences(): Promise<FlowReference[]> {
+    return this.references ??= (async () => {
+      const { collectTargets, findPageRefs } = await import("../xref/detect.ts");
+      const [index, sections] = await Promise.all([this.getTextIndex(), this.getSections()]);
+      const targets = collectTargets(index.pages, sections);
+      return index.pages.flatMap((page) => findPageRefs(page, targets).map((reference) => ({
+        id: reference.id, anchor: this.anchorForRange(page.pageNumber, reference.start, reference.end),
+        targets: reference.targets.filter((target) => this.document.blocks[target.pageNumber - 1]).map((target) => ({
+          label: target.name,
+          anchor: this.anchorForRange(target.pageNumber, target.range?.[0] ?? 0, target.range?.[1] ?? this.document.blocks[target.pageNumber - 1].text.length),
+        })),
+      })).filter((reference) => reference.targets.length));
+    })();
+  }
 
   // Search is over canonical text and returns native anchors directly.
   // Capped results keep broad queries from mounting thousands of rows.

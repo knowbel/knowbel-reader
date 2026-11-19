@@ -35,6 +35,19 @@ registerDocumentAdapter({ format: "markdown", extensions: [".md", ".markdown"], 
   },
 });
 
+registerDocumentAdapter({ format: "html", extensions: [".html", ".htm", ".xhtml"], mimeTypes: ["text/html", "application/xhtml+xml"],
+  load: () => import("../html/adapter.ts").then((module) => module.htmlAdapter),
+  parseLarge: async (input) => {
+    const { parseInWorker } = await import("../html/workerClient.ts");
+    const { WorkerUnavailableError } = await import("../markdown/workerClient.ts");
+    try { return await parseInWorker(input); }
+    catch (error) {
+      if (!(error instanceof WorkerUnavailableError)) throw error;
+      return (await import("../html/adapter.ts")).htmlAdapter.parse(input);
+    }
+  },
+});
+
 // One bounded cache shares import/open and StrictMode's overlapping loads.
 // The active reader releases it on close; no library-wide document cache.
 let recent: { key: string; promise: Promise<FlowDocument> } | undefined;

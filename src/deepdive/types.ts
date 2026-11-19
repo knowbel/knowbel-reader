@@ -36,6 +36,7 @@ export interface DivePanel {
   // Root dives: the page the selection is on (older dives: derived from the
   // anchor highlight instead).
   pageNumber?: number;
+  locationLabel?: string;
   // Nested dives: the passages the parent answer cited where the reader
   // selected from — still the relevant document text one level down.
   inheritedSources?: SourceRef[];

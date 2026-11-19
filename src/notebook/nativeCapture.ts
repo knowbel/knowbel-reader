@@ -6,6 +6,7 @@ export function flowSnapshot(node: FlowNode): RichNode {
     if (node.type === "text") return node.value ? [{ type: "text", text: node.value, ...(marks.length ? { marks } : {}) }] : [];
     if (node.type === "math") return [{ type: node.display ? "blockMath" : "inlineMath", attrs: { latex: node.value } }];
     if (node.type === "image") return [{ type: "image", attrs: { src: node.src, alt: node.alt } }];
+    if (node.type === "media") return [{ type: "text", text: node.value || "Media", marks: [{ type: "link", attrs: { href: node.src } }] }];
     const mark = ({ strong: "bold", em: "italic", del: "strike", code: "code", a: "link" } as Record<string, string>)[node.tag];
     if (mark) return node.children.flatMap((child) => convert(child, [...marks, { type: mark, ...(mark === 'link' ? { attrs: { href: node.href } } : {}) }]));
     const content = node.children.flatMap((child) => convert(child, marks));

@@ -1,4 +1,3 @@
-import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ASK_BUDGET, isFollowUp } from "../grounding/ask";
 import { attachmentQuery, attachmentSources, type Attachment } from "../grounding/attachments";
 import { citedSources, markersToPages } from "../grounding/citations";
@@ -8,7 +7,7 @@ import type { SourceRef } from "../grounding/types";
 import type { DocumentTextIndex } from "../glossary/textIndex";
 import type { GlossaryEntry } from "../glossary/types";
 import { meaningAt } from "../notation/symbols";
-import { getBm25, getChunks, getSections, getTextIndex } from "../text/documentText";
+import { getBm25, getChunks, getSections, getTextIndex, type TextDocument } from "../text/documentText";
 import type { CommentedHighlight } from "../types";
 import { getXrefIndex } from "../xref/xrefIndex";
 import { contextStrategy, type DiveExperiments } from "./experiments";
@@ -22,7 +21,7 @@ import type { DivePanel, DiveTurn } from "./types";
 // documents are read in full, using the same cutoff as Ask.
 
 export interface DiveRequestContext {
-  pdf: PDFDocumentProxy;
+  pdf: TextDocument;
   pageLabel: (pageNumber: number) => string;
   panels: DivePanel[];
   highlights: CommentedHighlight[];

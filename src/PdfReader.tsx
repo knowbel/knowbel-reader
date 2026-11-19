@@ -691,7 +691,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
           await Promise.all([docDataWriter.flush(), notebook.flush()]);
           await flushReadingState();
           onOpenDocument(meta);
-        } else showNotice("Couldn't read this Markdown file.");
+        } else showNotice("Couldn't read this document.");
         return;
       }
       let bytes: Uint8Array;

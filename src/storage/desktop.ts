@@ -5,6 +5,8 @@ import type { DocDataKind, DocumentMeta, LibraryStorage } from "./types.ts";
 //
 //   library/<docId>/source.pdf     existing PDF documents
 //   library/<docId>/source.md      original Markdown (never converted)
+//   library/<docId>/source.html    original HTML (never converted)
+//   library/<docId>/page.webarchive the original web page, for offline replay
 //   library/<docId>/meta.json      DocumentMeta
 //   library/<docId>/<kind>.json    one file per DocDataKind
 //
@@ -106,6 +108,13 @@ export function createDesktopStorage(fs: DesktopFs): LibraryStorage {
     async putData(docId, kind, value) {
       const json = JSON.stringify(value);
       return writeAtomic(docDir(docId), `${kind}.json`, (path) => fs.writeTextFile(path, json));
+    },
+    async getPageArchive(docId) {
+      const path = `${docDir(docId)}/page.webarchive`;
+      return (await fs.exists(path)) ? fs.readFile(path) : null;
+    },
+    async putPageArchive(docId, bytes) {
+      return writeAtomic(docDir(docId), "page.webarchive", (path) => fs.writeFile(path, bytes));
     },
     async removeDocument(docId) {
       const dir = docDir(docId);

@@ -27,6 +27,13 @@ export function pointAt(root: HTMLElement, node: Node, offset: number, end: bool
   return null;
 }
 
+export function pointFromScreen(root: HTMLElement, x: number, y: number, end = false): TextPoint | null {
+  const caret = document.caretPositionFromPoint?.(x, y);
+  if (caret && root.contains(caret.offsetNode)) return pointAt(root, caret.offsetNode, caret.offset, end);
+  const range = document.caretRangeFromPoint?.(x, y);
+  return range && root.contains(range.startContainer) ? pointAt(root, range.startContainer, range.startOffset, end) : null;
+}
+
 export function rangeAt(root: HTMLElement, point: TextPoint): Range | null {
   const block = root.querySelector<HTMLElement>(`[data-reader-block="${CSS.escape(point.blockId)}"]`);
   if (!block) return null;

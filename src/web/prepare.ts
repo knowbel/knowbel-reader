@@ -1,6 +1,7 @@
 // The server's MathML → LaTeX converter (plain JS, no dependencies).
 import { mathToTex } from "../../server/mathml.js";
 import { escapeCss, isPlaceholderSrc, normalizeText, parseSrcset, pickSrcsetCandidate } from "./html.ts";
+import { mediaUrl, playerUrl } from "../document/media.ts";
 import type { ImportReport } from "./types.ts";
 
 // Readies a fetched page for extraction (extract.ts) so that nothing on it
@@ -49,7 +50,7 @@ function withoutHash(url: string): string {
 
 // Every address in the page made absolute (from `base`); links to a spot on
 // the page itself (any of `pageUrls`) made into fragment links.
-export function absolutize(doc: Document, base: string, pageUrls: string[]) {
+export function absolutize(doc: Document | HTMLElement, base: string, pageUrls: string[]) {
   const resolve = (value: string | null): string | null => {
     if (value === null) return null;
     const trimmed = value.trim();
@@ -263,14 +264,24 @@ export function describeEmbed(src: string): Embed | null {
   return { kind: "embed", label: `Embedded content from ${host}`, url: src };
 }
 
-function mediaCard(doc: Document, embed: Embed, title: string | null, from: Element): HTMLElement {
+function mediaCard(doc: Document, embed: Embed, title: string | null, from: Element, native = false): HTMLElement {
   const card = doc.createElement("figure");
   card.setAttribute("data-kr-media", embed.kind);
   card.setAttribute("data-kr-media-url", embed.url);
   if (title) card.setAttribute("data-kr-media-title", title);
   const id = from.getAttribute(ID_ATTR);
   if (id) card.setAttribute(ID_ATTR, id);
-  if (embed.thumbnail) {
+  const direct = native && ["video", "audio"].includes(from.localName) && (from.hasAttribute("src") || from.querySelector("source[src]")) && mediaUrl(embed.url);
+  const player = native ? playerUrl(embed.url) : null;
+  if (direct || player) {
+    const media = doc.createElement(direct ? from.localName : "iframe");
+    media.setAttribute("src", direct || player!);
+    media.setAttribute("title", title || embed.label);
+    media.setAttribute("data-kr-player", "");
+    const poster = from.getAttribute("poster");
+    if (poster && mediaUrl(poster)) media.setAttribute("poster", poster);
+    card.append(media);
+  } else if (embed.thumbnail) {
     const img = doc.createElement("img");
     img.setAttribute("src", embed.thumbnail);
     img.setAttribute("alt", "");
@@ -294,10 +305,10 @@ function fileName(url: string): string {
   }
 }
 
-function convertMedia(doc: Document, pageUrl: string) {
+function convertMedia(doc: Document, pageUrl: string, native = false) {
   const titleOf = (el: Element) =>
     normalizeText(el.getAttribute("title") ?? el.getAttribute("aria-label") ?? el.getAttribute("data-title")) || null;
-  const replace = (el: Element, embed: Embed, title: string | null) => el.replaceWith(mediaCard(doc, embed, title, el));
+  const replace = (el: Element, embed: Embed, title: string | null) => el.replaceWith(mediaCard(doc, embed, title, el, native));
 
   for (const video of [...doc.querySelectorAll("video")]) {
     const src = [video.getAttribute("src"), ...[...video.querySelectorAll("source")].map((s) => s.getAttribute("src"))].find(
@@ -561,7 +572,7 @@ function markCallouts(doc: Document) {
 
 // ---- All together -----------------------------------------------------------------
 
-export function preparePage(doc: Document, pageUrl: string, canonicalUrl?: string): PreparedPage {
+export function preparePage(doc: Document, pageUrl: string, canonicalUrl?: string, native = false): PreparedPage {
   const baseHref = doc.querySelector("base[href]")?.getAttribute("href");
   let base = pageUrl;
   try {
@@ -580,7 +591,7 @@ export function preparePage(doc: Document, pageUrl: string, canonicalUrl?: strin
   revealScripted(doc);
   unwrapNoscript(doc);
   settlePictures(doc);
-  convertMedia(doc, pageUrl);
+  convertMedia(doc, pageUrl, native);
   convertMath(doc);
   const islands = findIslands(doc);
   markCallouts(doc);

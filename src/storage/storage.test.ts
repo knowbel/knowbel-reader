@@ -87,18 +87,18 @@ function fakeLegacy(entries: Record<string, string>): LegacyStore & { items: Map
 const DOC_ID = "a".repeat(64);
 const OTHER_ID = "b".repeat(64);
 
-test("desktop: original Markdown bytes and notes round-trip without using source.pdf", async () => {
+for (const [format, extension, source] of [["markdown", "md", "# Native notes\n\nA passage."], ["html", "html", "<h1>Native notes</h1><p>A passage.</p>"]] as const) test(`desktop: original ${format} bytes and notes round-trip without using source.pdf`, async () => {
   const { fs, files } = fakeFs();
   const storage = createDesktopStorage(fs);
-  const bytes = new TextEncoder().encode("# Native notes\n\nA passage.");
-  const { meta } = await importDocument(storage, { bytes, fileName: "Native notes.md", format: "markdown" });
-  assert.equal(meta.format, "markdown");
+  const bytes = new TextEncoder().encode(source);
+  const { meta } = await importDocument(storage, { bytes, fileName: `Native notes.${extension}`, format });
+  assert.equal(meta.format, format);
   assert.equal(meta.title, "Native notes");
-  assert.ok(files.has(`library/${meta.docId}/source.md`));
+  assert.ok(files.has(`library/${meta.docId}/source.${extension}`));
   assert.ok(!files.has(`library/${meta.docId}/source.pdf`));
   assert.deepEqual(await storage.getFile(meta.docId), bytes);
   await storage.putData(meta.docId, "nativeAnnotations", [{ id: "native-highlight", comment: "Remember this" }]);
-  const opened = await openDocument(storage, { bytes, fileName: "renamed.markdown", docId: meta.docId });
+  const opened = await openDocument(storage, { bytes, fileName: `renamed.${extension}`, docId: meta.docId });
   assert.deepEqual(opened.data.nativeAnnotations, [{ id: "native-highlight", comment: "Remember this" }]);
   assert.ok(opened.meta.openedAt);
 });
@@ -383,4 +383,16 @@ test("writer keeps documents apart and retries after a failed write", async () =
   await writer.flush();
   assert.deepEqual(await storage.getData(DOC_ID, "pins"), value);
   assert.deepEqual(await storage.getData(OTHER_ID, "pins"), []);
+});
+
+test("desktop: keeps a replaceable page archive beside the document", async () => {
+  const { fs, files } = fakeFs();
+  const storage = createDesktopStorage(fs);
+  assert.equal(await storage.getPageArchive!(DOC_ID), null);
+  await storage.putPageArchive!(DOC_ID, new Uint8Array([1, 2]));
+  await storage.putPageArchive!(DOC_ID, new Uint8Array([3]));
+  assert.deepEqual([...(await storage.getPageArchive!(DOC_ID))!], [3]);
+  assert.ok(files.has(`library/${DOC_ID}/page.webarchive`));
+  await storage.removeDocument(DOC_ID);
+  assert.equal(await storage.getPageArchive!(DOC_ID), null);
 });

@@ -61,7 +61,7 @@ export const markdownAdapter: DocumentAdapter = {
           ))]),
         ))];
         case "inlineMath": case "math": return [{ type: "math", value: node.value, display: node.type === "math", start: 0 }];
-        // Raw HTML stays inert. Future HTML support has its own parser and
+        // Raw HTML stays inert. HTML files have their own parser and
         // explicit sanitization; it cannot bypass this reader's node schema.
         case "html": return [text(node.value)];
         case "definition": return [];

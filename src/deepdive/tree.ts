@@ -15,8 +15,10 @@ export function ancestorChain(
   rootLabel: string,
 ): ChainEntry[] {
   const chain: ChainEntry[] = [];
+  const seen = new Set<string>();
   let id = focusId;
-  while (id != null) {
+  while (id != null && !seen.has(id)) {
+    seen.add(id);
     const panel = panelById(panels, id);
     if (!panel) break;
     chain.unshift({ id: panel.id, label: panel.label });
@@ -118,7 +120,10 @@ export function childrenOf(panels: DivePanel[], parentId: string): DivePanel[] {
 // "starting point" in the main text for the whole branch.
 export function rootPanelOf(panels: DivePanel[], panelId: string): DivePanel | null {
   let current = panelById(panels, panelId);
+  const seen = new Set<string>();
   while (current && current.parentId) {
+    if (seen.has(current.id)) return null;
+    seen.add(current.id);
     current = panelById(panels, current.parentId);
   }
   return current;
@@ -148,7 +153,10 @@ export function panelSubtreeIds(panels: DivePanel[], panelId: string): Set<strin
 // with its depth (the root is 0) — what the dive map and tree summary walk.
 export function treeOf(panels: DivePanel[], rootId: string): { panel: DivePanel; depth: number }[] {
   const out: { panel: DivePanel; depth: number }[] = [];
+  const seen = new Set<string>();
   const visit = (id: string, depth: number) => {
+    if (seen.has(id)) return;
+    seen.add(id);
     const panel = panelById(panels, id);
     if (!panel) return;
     out.push({ panel, depth });

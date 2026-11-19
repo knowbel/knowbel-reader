@@ -1,13 +1,13 @@
 import { pdfForEpub } from "../epub/index.ts";
 import { pickTitle } from "../library/library.ts";
-import { readPdfInfo } from "../library/pdfInfo.ts";
-import { importDocument } from "../storage/documents.ts";
+import { computeDocId, importDocument } from "../storage/documents.ts";
+import { parseDocument } from "../document/registry.ts";
 import type { DocumentMeta, DocumentSource, LibraryStorage } from "../storage/types.ts";
 import { serverFetcher } from "./fetcher.ts";
 import { classifyResource, decodeHtml } from "./html.ts";
 import { readMetadata } from "./metadata.ts";
 import type { PageRenderer } from "./renderer.ts";
-import { WebImportError, type ImportProgress, type ImportReport, type PageMetadata, type WebFetcher } from "./types.ts";
+import { WebImportError, type ImportProgress, type ImportReport, type PageMetadata, type WebFetcher, type RenderedArticlePage } from "./types.ts";
 import { arxivAbstractUrl, arxivId, canonicalizeUrl, fileNameFor, nameFromUrl, parseUserUrl, rewriteKnownUrl } from "./url.ts";
 
 // "Add from URL": a web address to a document in the library.
@@ -17,8 +17,8 @@ import { arxivAbstractUrl, arxivId, canonicalizeUrl, fileNameFor, nameFromUrl, p
 //     ├─ an EPUB ─▶ converted like an EPUB file (epub/)
 //     └─ a page ─▶ article found (metadata, prepare, extract, cleanup), its
 //                   figures captured from a styled render (renderer.ts), its
-//                   pictures saved (assets.ts), laid out as a book (book.ts)
-//                   and converted to a PDF by the EPUB converter (convert.ts)
+//                   pictures embedded in a portable HTML snapshot (snapshot.ts)
+//                   and opened in the shared native reader
 //
 // The fetcher and the renderer are interfaces, so a headless browser could
 // take over either (or both) without touching the rest.
@@ -34,6 +34,7 @@ export type AddFromUrlResult =
   | { status: "existing"; meta: DocumentMeta; unchanged?: boolean };
 
 export interface AddFromUrlOptions {
+  renderedPage?: RenderedArticlePage;
   signal?: AbortSignal;
   onProgress?: (progress: ImportProgress) => void;
   force?: boolean; // fetch it again even if the address is already in the library
@@ -65,12 +66,15 @@ export async function findSaved(storage: LibraryStorage, ...urls: (string | unde
   const wanted = sameDocumentKeys(...urls);
   if (wanted.size === 0) return null;
   const documents = await storage.listDocuments();
+  let saved: DocumentMeta | null = null;
   for (const doc of documents) {
     if (!doc.source || doc.fileMissing) continue;
     const keys = sameDocumentKeys(doc.source.canonicalUrl, doc.source.url, doc.source.finalUrl);
-    if ([...keys].some((key) => wanted.has(key))) return doc;
+    if (![...keys].some((key) => wanted.has(key))) continue;
+    const newer = saved && Date.parse(doc.source.fetchedAt) > Date.parse(saved.source!.fetchedAt);
+    if (!saved || (doc.format === "html" && (saved.format !== "html" || newer))) saved = doc;
   }
-  return null;
+  return saved;
 }
 
 function canonicalFor(...urls: (string | undefined)[]): string {
@@ -101,7 +105,11 @@ export async function addFromUrl(storage: LibraryStorage, input: string, options
   }
 
   progress({ stage: "fetching" });
-  const resource = await fetcher.fetch(requested.href, { purpose: "page", signal });
+  const rendered = options.renderedPage;
+  if (rendered && (!parseUserUrl(rendered.url) || rendered.html.length > 16 * 1024 * 1024)) throw new WebImportError("The captured page is invalid or too large.");
+  const resource = rendered && rendered.contentType !== "application/pdf"
+    ? { url: requested.href, finalUrl: rendered.url, contentType: "text/html; charset=utf-8", bytes: new TextEncoder().encode(rendered.html) }
+    : await fetcher.fetch(rendered?.url ?? requested.href, { purpose: "page", signal });
   if (signal?.aborted) throw abortError();
   const fetchedAt = new Date().toISOString();
   const kind = classifyResource(resource.contentType, resource.bytes);
@@ -124,8 +132,8 @@ export async function addFromUrl(storage: LibraryStorage, input: string, options
     throw new WebImportError(`Knowbel can't read this kind of file (${resource.contentType.split(";")[0] || "unknown type"}).`);
   }
 
-  const { readPage, convertArticle } = await import("./convert");
-  const { frameRenderer } = await import("./renderer");
+  const { readPage, prepareArticle } = await import("./convert.ts");
+  const { frameRenderer } = await import("./renderer.ts");
   progress({ stage: "reading" });
   const page = readPage(html, resource.finalUrl);
 
@@ -146,13 +154,14 @@ export async function addFromUrl(storage: LibraryStorage, input: string, options
     if (existing) return { status: "existing", meta: existing };
   }
 
-  const converted = await convertArticle(page, {
+  const prepared = await prepareArticle(page, {
     fetcher,
     renderer: options.renderer ?? frameRenderer(fetcher),
     sourceUrl: page.meta.canonicalUrl ?? resource.finalUrl,
     fetchedAt,
     signal,
     onProgress: progress,
+    native: true,
   });
   if (signal?.aborted) throw abortError();
 
@@ -165,13 +174,25 @@ export async function addFromUrl(storage: LibraryStorage, input: string, options
     ...(page.meta.siteName ? { siteName: page.meta.siteName } : {}),
     ...(page.meta.publishedAt ? { publishedAt: page.meta.publishedAt } : {}),
   };
-  const saved = await saveToLibrary(storage, converted.pdf, {
-    docId: converted.docId,
-    title: page.meta.title,
-    authors: page.meta.authors,
-    source,
-  });
-  return saved.added ? { status: "added", meta: saved.meta, report: converted.report } : { status: "existing", meta: saved.meta, unchanged: true };
+  const { articleSnapshot } = await import("./snapshot.ts");
+  const bytes = articleSnapshot(prepared, canonicalUrl);
+  const docId = await computeDocId(bytes);
+  const fileName = fileNameFor(page.meta.title, "html");
+  const existing = await storage.getMeta(docId);
+  await parseDocument("html", { id: docId, bytes, fileName });
+  if (signal?.aborted) throw abortError();
+  const { meta, added } = await importDocument(storage, { bytes, fileName, docId, format: "html" });
+  if (!added) {
+    const complete = meta.source ? meta : { ...meta, source };
+    if (complete !== meta) await storage.putMeta(complete);
+    return { status: "existing", meta: complete, unchanged: true };
+  }
+  const complete: DocumentMeta = {
+    ...meta, title: existing?.title ?? page.meta.title,
+    ...(page.meta.authors.length ? { author: page.meta.authors.join(", ") } : {}), source,
+  };
+  await storage.putMeta(complete);
+  return { status: "added", meta: complete, report: prepared.report };
 }
 
 // ---- Into the library ---------------------------------------------------------------
@@ -181,6 +202,7 @@ async function saveToLibrary(
   pdf: Uint8Array,
   details: { docId?: string; title: string; authors: string[]; source: DocumentSource },
 ): Promise<{ meta: DocumentMeta; added: boolean }> {
+  const { readPdfInfo } = await import("../library/pdfInfo.ts");
   const info = await readPdfInfo(pdf);
   if (!info) throw new WebImportError("The document couldn't be read after it was made.");
   const { meta, added } = await importDocument(storage, { bytes: pdf, fileName: fileNameFor(details.title), docId: details.docId });
@@ -223,6 +245,7 @@ async function savePdf(
     onProgress: (progress: ImportProgress) => void;
   },
 ): Promise<AddFromUrlResult> {
+  const { readPdfInfo } = await import("../library/pdfInfo.ts");
   let pageMeta = options.pageMeta;
   const id = arxivId(options.finalUrl) ?? arxivId(options.url);
   if (!pageMeta && id) {
@@ -263,6 +286,7 @@ async function saveEpub(
   const epub = await pdfForEpub(storage, bytes);
   if (epub.existing) return { status: "existing", meta: epub.existing, unchanged: true };
   onProgress({ stage: "saving" });
+  const { readPdfInfo } = await import("../library/pdfInfo.ts");
   const info = await readPdfInfo(epub.pdf);
   if (!info) throw new WebImportError("The EPUB couldn't be converted.");
   const source: DocumentSource = { kind: "web", format: "epub", ...base, canonicalUrl: canonicalFor(base.finalUrl, base.url) };

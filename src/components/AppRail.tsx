@@ -96,6 +96,7 @@ export interface ViewSettings {
 
 interface AppRailProps {
   reflowable?: boolean;
+  allowArea?: boolean;
   onHome: () => void; // back to the library
   // The panel shown in the sidebar, or null (none open, or in Deep Dive).
   activePanel: SidebarPanel | null;
@@ -120,6 +121,7 @@ export default function AppRail({
   onPenChange,
   view,
   reflowable = false,
+  allowArea = false,
 }: AppRailProps) {
   return (
     <nav className="app-rail" aria-label="Reader controls">
@@ -157,7 +159,7 @@ export default function AppRail({
           pen={pen}
           onPenChange={onPenChange}
         />
-        {!reflowable ? <ToolButton
+        {!reflowable || allowArea ? <ToolButton
           label="Area highlight (or Alt-drag)"
           active={tool === "area"}
           onClick={() => onSelectTool("area")}

@@ -1,18 +1,15 @@
-import { convertBookToPdf } from "../epub/convert.ts";
-import { BOOK_PAGE, columnSize } from "../epub/writePdf.ts";
 import { computeDocId } from "../storage/documents.ts";
-import { saveImages } from "./assets.ts";
-import { buildArticleBook } from "./book.ts";
+import { rasterizeImage, saveImages } from "./assets.ts";
 import { cleanArticle, isIconSvg } from "./cleanup.ts";
 import { extractArticle } from "./extract.ts";
 import { normalizeText } from "./html.ts";
 import { readMetadata } from "./metadata.ts";
-import { ID_ATTR, preparePage, tagElements, type Island } from "./prepare.ts";
+import { absolutize, ID_ATTR, preparePage, tagElements, type Island } from "./prepare.ts";
 import type { PageRenderer, RenderedPage, Snapshot } from "./renderer.ts";
 import { emptyReport, WebImportError, type ImportProgress, type ImportReport, type PageMetadata, type WebFetcher } from "./types.ts";
 
-// A web page (HTML) to a PDF of its article. Loaded only when a page is
-// being added (see index.ts for the whole flow, PDFs and EPUBs included).
+// Shared article preparation. The native URL import uses its cleaned tree
+// and assets directly; the optional PDF conversion is loaded only on demand.
 
 export interface ReadPage {
   doc: Document;
@@ -26,6 +23,24 @@ export interface ConvertedArticle {
   docId: string;
   meta: PageMetadata;
   report: ImportReport;
+}
+
+export interface ArticleOptions {
+  fetcher: WebFetcher;
+  renderer?: PageRenderer;
+  sourceUrl: string;
+  fetchedAt: string;
+  native?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (progress: ImportProgress) => void;
+}
+
+export interface PreparedArticle {
+  content: HTMLElement;
+  files: Map<string, Uint8Array>;
+  meta: PageMetadata;
+  report: ImportReport;
+  titleAnchor?: string;
 }
 
 export function readPage(html: string, finalUrl: string): ReadPage {
@@ -47,7 +62,7 @@ function needsScripts(html: string): boolean {
 
 // The figure as captured, with its words laid invisibly over it — so they
 // can still be searched, selected and asked about.
-function placeSnapshot(placeholder: Element, island: Island, snapshot: Snapshot, path: string) {
+async function placeSnapshot(placeholder: Element, island: Island, snapshot: Snapshot, path: string, native: boolean) {
   const doc = placeholder.ownerDocument;
   const img = placeholder.querySelector('img[src^="kr-island:"]');
   const wrap = doc.createElement("div");
@@ -60,7 +75,9 @@ function placeSnapshot(placeholder: Element, island: Island, snapshot: Snapshot,
   picture.setAttribute("height", String(Math.round(snapshot.height)));
   wrap.append(picture);
   const words = [...new Set([island.alt, island.text].filter(Boolean))].join(" — ");
-  if (words) {
+  if (native) picture.setAttribute("alt", words);
+  else if (words) {
+    const { BOOK_PAGE, columnSize } = await import("../epub/writePdf.ts");
     const column = columnSize(BOOK_PAGE).width;
     const width = Math.min(snapshot.width, column);
     const height = snapshot.height * (width / snapshot.width);
@@ -110,12 +127,14 @@ async function captureFromRender(
   report: ImportReport,
   pageUrl: string,
   onProgress: (done: number, total: number) => void,
+  native: boolean,
 ) {
   const doc = content.ownerDocument;
   const placeholders = [...content.querySelectorAll("[data-kr-island]")];
   const svgs = [...content.querySelectorAll("svg")].filter((svg) => !svg.parentElement?.closest("svg"));
   const total = placeholders.length + svgs.length;
   let done = 0;
+  let svgCounter = 0;
 
   // Inline SVG: its true size and colours come from the site's CSS.
   for (const svg of svgs) {
@@ -123,6 +142,35 @@ async function captureFromRender(
     const size = render && id ? await render.size(id) : null;
     if (size && size.width <= 32 && size.height <= 32) {
       svg.remove(); // an icon after all
+    } else if (native) {
+      if ((size && !size.width) || isIconSvg(svg)) {
+        svg.remove();
+      } else {
+        const snapshot = render && id ? await render.snapshot(id) : null;
+        const copy = svg.cloneNode(true) as Element;
+        copy.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+        const png = snapshot?.png ?? await rasterizeImage(new TextEncoder().encode(copy.outerHTML), "image/svg+xml");
+        const alt = normalizeText(svg.getAttribute("aria-label") || svg.textContent) || "Figure";
+        if (png) {
+          const path = `images/svg-${++svgCounter}.png`;
+          files.set(path, png);
+          const image = doc.createElement("img");
+          image.setAttribute("src", path);
+          image.setAttribute("alt", alt);
+          if (svg.id) image.id = svg.id;
+          svg.replaceWith(image);
+          report.figuresCaptured++;
+        } else {
+          const fallback = doc.createElement("p");
+          fallback.textContent = `${alt} — figure unavailable. `;
+          const link = doc.createElement("a");
+          link.setAttribute("href", pageUrl);
+          link.textContent = "View it on the web";
+          fallback.append(link);
+          svg.replaceWith(fallback);
+          report.figuresFailed++;
+        }
+      }
     } else if (render && id && size && size.width > 0) {
       const standalone = await render.standaloneSvg(id);
       if (standalone) {
@@ -149,7 +197,7 @@ async function captureFromRender(
     if (snapshot) {
       const path = `images/figure-${String(++counter).padStart(2, "0")}.png`;
       files.set(path, snapshot.png);
-      placeSnapshot(placeholder, island, snapshot, path);
+      await placeSnapshot(placeholder, island, snapshot, path, native);
       report.figuresCaptured += 1;
     } else {
       placeFallback(placeholder, island, pageUrl);
@@ -177,27 +225,24 @@ async function contentHash(chapter: string, files: Map<string, Uint8Array>): Pro
   return computeDocId(all);
 }
 
-export async function convertArticle(
+export async function prepareArticle(
   page: ReadPage,
-  options: {
-    fetcher: WebFetcher;
-    renderer?: PageRenderer;
-    sourceUrl: string;
-    fetchedAt: string;
-    signal?: AbortSignal;
-    onProgress?: (progress: ImportProgress) => void;
-  },
-): Promise<ConvertedArticle> {
+  options: ArticleOptions,
+): Promise<PreparedArticle> {
   const { meta, finalUrl } = page;
   const report = emptyReport();
   const progress = options.onProgress ?? (() => {});
   const aborted = () => {
     if (options.signal?.aborted) throw new DOMException("Cancelled", "AbortError");
   };
+  aborted();
 
   progress({ stage: "reading" });
-  const prepared = preparePage(page.doc, finalUrl, meta.canonicalUrl);
+  const prepared = preparePage(page.doc, finalUrl, meta.canonicalUrl, options.native);
   const { content, restoredBlocks, usedFallback } = extractArticle(prepared, meta);
+  // Readability makes fragments absolute when DOMParser's document URI
+  // differs from the page's base. Restore links into the saved article.
+  absolutize(content, finalUrl, [finalUrl, ...(meta.canonicalUrl ? [meta.canonicalUrl] : [])]);
   report.restoredBlocks = restoredBlocks;
   cleanArticle(content, meta.title);
 
@@ -205,14 +250,16 @@ export async function convertArticle(
   const pictures = content.querySelectorAll("img, svg, [data-kr-island]").length;
   const scripted = needsScripts(page.taggedHtml);
   if (textLength < 200 && pictures === 0) {
-    throw new WebImportError(
+    const error = new WebImportError(
       scripted
-        ? "This page builds its content with JavaScript, which Knowbel can't run yet, so there was nothing to save."
+        ? "This page needs JavaScript to finish loading. Open it in the Knowbel desktop browser, then choose Read in Knowbel."
         : "Couldn't find any readable content on this page.",
     );
+    error.browserRecommended = scripted;
+    throw error;
   }
   if (scripted && textLength < 1500) {
-    report.warnings.push("This page builds some of its content with JavaScript, which Knowbel can't run yet. Parts of it may be missing.");
+    report.warnings.push("Some content needs JavaScript and may be missing. The Knowbel desktop browser can capture the page after it finishes loading.");
   }
   if (usedFallback) {
     report.warnings.push("Knowbel couldn't tell the article apart from the rest of the page, so it kept the page's whole main section.");
@@ -235,6 +282,7 @@ export async function convertArticle(
     if (needsRender) {
       await captureFromRender(content, prepared.islands, render, files, report, finalUrl, (done, total) =>
         progress({ stage: "figures", done, total }),
+        options.native ?? false,
       );
     }
   } finally {
@@ -249,13 +297,14 @@ export async function convertArticle(
     files,
     report,
     signal: options.signal,
+    native: options.native,
     onProgress: (done, total) => progress({ stage: "images", done, total }),
   });
   aborted();
 
   for (const card of content.querySelectorAll("[data-kr-media]")) {
     const title = card.getAttribute("data-kr-media-title");
-    report.media.push({
+    if (!card.querySelector("video, audio, iframe[data-kr-player]")) report.media.push({
       kind: card.getAttribute("data-kr-media") as ImportReport["media"][number]["kind"],
       url: card.getAttribute("data-kr-media-url") ?? finalUrl,
       ...(title ? { title } : {}),
@@ -263,8 +312,16 @@ export async function convertArticle(
     card.removeAttribute("data-kr-media-url");
     card.removeAttribute("data-kr-media-title");
   }
-  report.mathAsTex = content.querySelectorAll("[data-kr-math]").length;
+  report.mathAsTex = options.native ? 0 : content.querySelectorAll("[data-kr-math]").length;
+  const titleAnchor = page.meta.titleId ? page.doc.querySelector(`[${ID_ATTR}="${page.meta.titleId}"]`)?.getAttribute("id") ?? undefined : undefined;
+  return { content, files, meta, report, titleAnchor };
+}
 
+export async function convertArticle(page: ReadPage, options: ArticleOptions): Promise<ConvertedArticle> {
+  const { content, files, meta, report } = await prepareArticle(page, { ...options, native: false });
+  const { buildArticleBook } = await import("./book.ts");
+  const { convertBookToPdf } = await import("../epub/convert.ts");
+  const progress = options.onProgress ?? (() => {});
   progress({ stage: "layout" });
   const { book, chapter } = buildArticleBook({ meta, sourceUrl: options.sourceUrl, fetchedAt: options.fetchedAt, content, files });
   const docId = await contentHash(chapter, files);
