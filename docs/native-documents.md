@@ -271,6 +271,24 @@ its editor does not participate in source-document parsing or layout.
 
 ## Verification
 
+macOS file associations live in `src-tauri/tauri.macos.conf.json`; imported
+Markdown and EPUB type declarations live in `src-tauri/Info.plist`. The app
+registers as an alternate viewer, leaving the user's default application choice
+alone. `RunEvent::Opened` queues incoming file URLs until the frontend is ready.
+The main webview can read only those queued requests, using raw byte IPC; the
+general filesystem scope remains restricted to the library. Each file goes
+through `library/importFiles.ts` for parsing, deduplication and reader routing.
+External opens await the active reader's checkpoint, page archive and saves
+before switching. Save failures keep its in-memory writing mounted.
+
+`npm run test:macos-file-open` checks real LaunchServices delivery with a
+temporary `.app`, synthetic documents and an isolated library. Start Vite with
+`./node_modules/.bin/vite --host 127.0.0.1 --port 5178 --strictPort` first.
+The check covers cold launch, later opens, names with spaces/punctuation/Unicode,
+active notebook edits, deduplication, multi-file events, failed imports and PDF
+rendering. It unregisters and removes its fixture app afterward. Rust queue tests
+run with `cargo test --offline --manifest-path src-tauri/Cargo.toml --lib`.
+
 `npm test` covers parsing, semantic objects, canonical offsets, Unicode,
 anchors, retrieval, citations, original-byte storage, deduplication, backup
 relinking and save flushing, alongside the existing PDF suite. Notebook checks cover migration, shared mark ownership, acknowledged saves,

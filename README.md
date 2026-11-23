@@ -17,6 +17,15 @@ and Linux, but those builds haven't been tried yet.
 - Import PDFs, EPUBs, Markdown (`.md`, `.markdown`) and HTML (`.html`, `.htm`, `.xhtml`) (**⌘O**). Importing the
   same content twice opens its existing entry. PDFs and EPUBs also supply
   their embedded title, author, page count and cover.
+- On macOS, the installed app appears in Finder’s **Open With** menu for these
+  formats. Files opened from Finder or dropped on the Dock icon import into
+  the library and open in the reader, whether Knowbel is starting or already
+  running. Existing documents retain their notes and reading position. A batch
+  opens in order, leaving the last successful document visible. Current writing
+  is saved before switching; a failed save keeps the current reader open.
+  Build and install a fresh `.app` to register the associations; the Vite dev
+  server alone does not register them. Knowbel registers as an alternate viewer;
+  users can choose their default app in Finder’s **Get Info → Open with**.
 - Markdown is read natively, with reflowing text, adjustable text size, GFM
   tables and task lists, code, links, and KaTeX equations. The original file
   is kept unchanged. Text highlights, comments, sticky notes, search,
@@ -290,6 +299,7 @@ How the packaged app differs from the browser version:
 | `npm test`               | Run the unit tests                                        |
 | `npm run test:reader`    | Browser reader regression checks (local Chrome debugger) |
 | `npm run test:desktop-reader` | Cold-start checks in desktop WebKit on macOS (build first) |
+| `npm run test:macos-file-open` | Real macOS file-open events in a temporary app/library (start Vite on port 5178 first) |
 | `npm run lint`           | Lint with oxlint                                          |
 | `npm run build:server`   | Bundle the API server for the desktop app (run by `tauri build`) |
 | `npm run tauri dev` / `build` | Run or package the desktop app                       |

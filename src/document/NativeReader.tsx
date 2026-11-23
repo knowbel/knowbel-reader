@@ -246,7 +246,7 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     await flush();
     onHome();
   });
-  useReaderPersistence({ checkpoint: notebook.checkpoint, cancel: closeJobs, flush });
+  useReaderPersistence({ checkpoint: notebook.checkpoint, cancel: closeJobs, flush, beforeLeave: async () => { await archiveBeforeLeaving(); } });
   useEffect(() => {
     if (controller.current.signal.aborted) controller.current = new AbortController();
     return () => {

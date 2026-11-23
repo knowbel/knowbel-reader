@@ -1,8 +1,11 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import LibraryHome from "./library/LibraryHome";
 import { getStorage } from "./storage";
+import { importFiles } from "./library/importFiles";
 import type { DocumentMeta } from "./storage/types";
 import ReaderBoundary from "./components/ReaderBoundary";
+import { showNotice } from "./components/notices";
+import { prepareReaderTransition } from "./notebook/readerTransition";
 import "./App.css";
 
 // A native text document never loads the PDF viewer, worker, fonts or
@@ -19,6 +22,30 @@ const NativeReader = lazy(() => import("./document/NativeReader"));
 
 export default function App() {
   const [selectedDocument, setDocument] = useState<DocumentMeta | null>(null);
+  const selectedRef = useRef(selectedDocument); selectedRef.current = selectedDocument;
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window) || !navigator.userAgent.includes("Mac")) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void Promise.all([import("@tauri-apps/api/core"), import("@tauri-apps/api/event"), import("./library/openedFiles")])
+      .then(([{ invoke }, { listen }, { watchOpenedFiles }]) => {
+        if (disposed) return;
+        stop = watchOpenedFiles({
+          listen: (wake) => listen("knowbel-opened-files", wake),
+          pending: () => invoke("pending_opened_files"),
+          read: (id) => invoke<ArrayBuffer>("read_opened_file", { id }),
+        }, async (file) => {
+          const result = await importFiles(getStorage(), [file]);
+          const meta = result.added[0] ?? result.alreadyThere[0];
+          if (!meta) throw new Error("The file is unsupported, unreadable, or damaged.");
+          if (meta.docId === selectedRef.current?.docId) return;
+          try { await prepareReaderTransition(); }
+          catch { throw new Error("Your current changes couldn’t be saved. Keep this document open and try again."); }
+          setDocument(meta);
+        }, showNotice);
+      }).catch(() => showNotice("Couldn’t set up opening documents from macOS."));
+    return () => { disposed = true; stop?.(); };
+  }, []);
   useEffect(() => {
     const title = selectedDocument ? `${selectedDocument.title} — Knowbel Reader` : "Knowbel Reader";
     document.title = title;

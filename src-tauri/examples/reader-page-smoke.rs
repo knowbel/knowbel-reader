@@ -3,6 +3,8 @@
 // Run Vite on 127.0.0.1:5178, then cargo run --offline --example reader-page-smoke.
 #[path = "../src/browser.rs"]
 mod browser;
+#[path = "../src/opened_files.rs"]
+mod opened_files;
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -54,9 +56,9 @@ fn main() {
         tauri::utils::config::AppDirectoriesOverride::Root(temp.clone()),
     );
     context.config_mut().build.dev_url = Some("http://127.0.0.1:5178".parse().unwrap());
-    tauri::Builder::default().manage(browser::PageState::default())
+    tauri::Builder::default().manage(browser::PageState::default()).manage(opened_files::OpenedFiles::default())
     .plugin(tauri_plugin_fs::init()).plugin(tauri_plugin_opener::init())
-    .invoke_handler(tauri::generate_handler![get_api_key,browser::open_import_browser,browser::position_import_browser,browser::import_browser_action,browser::capture_import_browser,browser::read_page_selection,browser::read_page_interaction,browser::decorate_page,browser::print_reader,browser::save_page_archive,browser::load_page_archive])
+    .invoke_handler(tauri::generate_handler![get_api_key,opened_files::pending_opened_files,opened_files::read_opened_file,browser::open_import_browser,browser::position_import_browser,browser::import_browser_action,browser::capture_import_browser,browser::read_page_selection,browser::read_page_interaction,browser::decorate_page,browser::print_reader,browser::save_page_archive,browser::load_page_archive])
     .setup(move|app|{
         let id="a".repeat(64);
         let dir=app.path().app_data_dir()?.join("library").join(&id);std::fs::create_dir_all(&dir)?;

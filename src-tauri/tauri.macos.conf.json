@@ -1,0 +1,10 @@
+{
+  "bundle": {
+    "fileAssociations": [
+      { "ext": ["pdf"], "name": "PDF document", "contentTypes": ["com.adobe.pdf"], "role": "Viewer", "rank": "Alternate" },
+      { "ext": ["epub"], "name": "EPUB book", "contentTypes": ["org.idpf.epub-container"], "role": "Viewer", "rank": "Alternate" },
+      { "ext": ["md", "markdown"], "name": "Markdown document", "contentTypes": ["net.daringfireball.markdown"], "role": "Viewer", "rank": "Alternate" },
+      { "ext": ["html", "htm", "xhtml"], "name": "HTML document", "contentTypes": ["public.html", "public.xhtml"], "role": "Viewer", "rank": "Alternate" }
+    ]
+  }
+}

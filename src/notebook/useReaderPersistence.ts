@@ -1,11 +1,17 @@
 import { useEffect, useRef } from "react";
 import { showNotice } from "../components/notices";
+import { registerReaderTransition } from "./readerTransition";
 
 // Browser lifecycle checkpoints supplement normal saves. A native close can
 // actually wait for storage, so do so before allowing the window to close.
-export function useReaderPersistence(options: { flush: () => Promise<unknown>; checkpoint: () => void; cancel: () => void }) {
+export function useReaderPersistence(options: { flush: () => Promise<unknown>; checkpoint: () => void; cancel: () => void; beforeLeave?: () => Promise<unknown> }) {
   const latest = useRef(options); latest.current = options;
   useEffect(() => {
+    const unregister = registerReaderTransition(async () => {
+      latest.current.cancel(); latest.current.checkpoint();
+      await latest.current.beforeLeave?.();
+      await latest.current.flush();
+    });
     const checkpoint = () => { latest.current.checkpoint(); void latest.current.flush().catch(() => {}); };
     const hidden = () => { if (document.visibilityState === "hidden") checkpoint(); };
     const pageHide = () => { latest.current.cancel(); checkpoint(); };
@@ -21,6 +27,6 @@ export function useReaderPersistence(options: { flush: () => Promise<unknown>; c
       });
       if (disposed) remove(); else unlisten = remove;
     }).catch(() => {});
-    return () => { disposed = true; unlisten?.(); document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", pageHide); latest.current.checkpoint(); };
+    return () => { disposed = true; unregister(); unlisten?.(); document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", pageHide); latest.current.checkpoint(); };
   }, []);
 }

@@ -2,6 +2,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Manager, RunEvent};
 mod browser;
+#[cfg(target_os = "macos")]
+mod opened_files;
 
 // Holds the child process for the bundled Deep Dive API server (see
 // scripts/build-server.mjs) so it can be killed when the app exits.
@@ -103,7 +105,10 @@ fn migrate_legacy_library(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-  tauri::Builder::default()
+  let builder = tauri::Builder::default();
+  #[cfg(target_os = "macos")]
+  let builder = builder.manage(opened_files::OpenedFiles::default());
+  builder
     .manage(ServerProcess(Mutex::new(None)))
     .manage(browser::PageState::default())
     // The document library lives in plain files under the app data folder
@@ -113,6 +118,10 @@ pub fn run() {
     // "Show in Finder" for a document's folder in the library.
     .plugin(tauri_plugin_opener::init())
     .invoke_handler(tauri::generate_handler![get_api_key, set_api_key, delete_api_key,
+      #[cfg(target_os = "macos")]
+      opened_files::pending_opened_files,
+      #[cfg(target_os = "macos")]
+      opened_files::read_opened_file,
       browser::open_import_browser, browser::import_browser_action, browser::capture_import_browser, browser::position_import_browser, browser::read_page_selection, browser::read_page_interaction, browser::decorate_page, browser::print_reader, browser::save_page_archive, browser::load_page_archive])
     .setup(|app| {
       migrate_legacy_library(app.handle());
@@ -149,6 +158,10 @@ pub fn run() {
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
     .run(|app_handle, event| {
+      #[cfg(target_os = "macos")]
+      if let RunEvent::Opened { urls } = &event {
+        opened_files::receive(app_handle, urls.clone());
+      }
       if let RunEvent::Exit = event {
         if let Some(mut child) = app_handle.state::<ServerProcess>().0.lock().unwrap().take() {
           let _ = child.kill();
