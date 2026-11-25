@@ -19,6 +19,7 @@ export interface DiveExperiments {
   readerNotes: boolean; // glossary definitions and the reader's own notes near the selection, as hints
   stableSources: boolean; // follow-ups keep the first answer's sources (same labels; a prompt-cache hit)
   // ---- Answers ----
+  guidedQuestions: boolean; // start with likely questions and read each answer in its own thread
   orientationFirst: boolean; // a brief orientation first, fuller explanations on follow-ups
   keepOpeningAnswer: boolean; // follow-ups always resend the first answer
   suggestions: boolean; // suggested follow-ups and dives after every answer
@@ -39,6 +40,7 @@ export const DEFAULT_EXPERIMENTS: DiveExperiments = {
   nestedContext: false,
   readerNotes: false,
   stableSources: false,
+  guidedQuestions: true,
   orientationFirst: false,
   keepOpeningAnswer: false,
   suggestions: false,
@@ -75,6 +77,7 @@ export const EXPERIMENT_GROUPS: { title: string; items: { key: DiveExperimentKey
   {
     title: "Answers",
     items: [
+      { key: "guidedQuestions", label: "Guided Deep Dive", hint: "Start with likely points of confusion, then explore and branch from individual answers." },
       { key: "orientationFirst", label: "Orientation first", hint: "A brief first answer (what it says, what leads to it, its role); fuller explanations on follow-ups." },
       { key: "keepOpeningAnswer", label: "Remember the first answer", hint: "Follow-ups always resend the dive's first answer, not just the last two exchanges." },
       { key: "suggestions", label: "Suggested dives", hint: "Follow-up questions and concepts to dive into, as pills after every answer." },

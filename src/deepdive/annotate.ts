@@ -44,6 +44,8 @@ export interface AnnotateOptions {
   // turn each placement-less target was found in first, so it's placed once
   // rather than on every turn that happens to contain the same text.
   claims: Map<string, number>;
+  // A preview omits later occurrences, so a missing match is intentional.
+  strictOccurrence?: boolean;
 }
 
 type Parent = Root | Element;
@@ -139,9 +141,7 @@ function nthIndexOf(haystack: string, needle: string, n: number): number {
   for (let i = 0; i < n && index !== -1; i++) {
     index = haystack.indexOf(needle, index + 1);
   }
-  // A stored occurrence past the end (turns are append-only, so this
-  // shouldn't happen) is better placed on the first copy than dropped.
-  return index === -1 ? haystack.indexOf(needle) : index;
+  return index;
 }
 
 // Which copy of `needle` in `haystack` (both already compacted) starts
@@ -169,11 +169,12 @@ interface Span {
   target: AnnotationTarget;
 }
 
-function locate(target: AnnotationTarget, haystacks: ReturnType<typeof buildHaystack>[]): Span | null {
+function locate(target: AnnotationTarget, haystacks: ReturnType<typeof buildHaystack>[], strictOccurrence = false): Span | null {
   const needle = compactText(target.text);
   if (!needle) return null;
   for (const haystack of haystacks) {
-    const index = nthIndexOf(haystack.text, needle, target.occurrence ?? 0);
+    let index = nthIndexOf(haystack.text, needle, target.occurrence ?? 0);
+    if (index === -1 && !strictOccurrence) index = haystack.text.indexOf(needle);
     if (index === -1) continue;
     return {
       start: haystack.units[index],
@@ -286,7 +287,7 @@ export function rehypeAnnotate(options: AnnotateOptions) {
     const haystacks = [buildHaystack(atoms, "tex"), buildHaystack(atoms, "glyphs")];
     const spans: Span[] = [];
     for (const target of candidates) {
-      const span = locate(target, haystacks);
+      const span = locate(target, haystacks, options.strictOccurrence);
       if (!span) continue;
       spans.push(span);
       if (target.turnIndex === undefined) claims.set(`${target.kind}:${target.id}`, turnIndex);

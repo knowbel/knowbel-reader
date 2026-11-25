@@ -56,11 +56,12 @@ const MATH_FUNCTION_WORDS = new Set([
 const TRIGGER = /[Ͱ-Ͽ⁰-₟⟨⟩|]/;
 const DIGIT_OR_SYMBOL = /[0-9Ͱ-Ͽ⁰-₟⟨⟩|]/;
 const LONE_OPERATOR = new Set(["-", "+", "*", "/", "="]);
+const TEX_SPACING = /^(?:,|\\(?:qquad|quad|[,;:!]))+$/;
 
 // Kets and \sqrt are unambiguous math-only signals (unlike a bare "=" or
 // "|", which can show up in prose or markdown tables) — their presence
 // alone is enough to promote a run, no "=" required.
-const STRONG_MATH_SIGNAL = /⟨|⟩|\\sqrt/;
+const STRONG_MATH_SIGNAL = /[⟨⟩]|\\(?:sqrt|langle|rangle)\b/;
 
 const PROTECTED_SPAN = /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|`[^`\n]+?`)/g;
 
@@ -83,6 +84,7 @@ function isEquationToken(token: string): boolean {
   if (DIGIT_OR_SYMBOL.test(token)) return true;
   if (token.includes("=")) return true;
   if (STRONG_MATH_SIGNAL.test(token)) return true;
+  if (TEX_SPACING.test(token)) return true;
   const bare = token.replace(/[^A-Za-z]/g, "").toLowerCase();
   return Boolean(bare && MATH_FUNCTION_WORDS.has(bare));
 }
@@ -93,8 +95,9 @@ function convertGreekAndSuperscript(str: string): string {
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i];
     const next = chars[i + 1];
-    if (GREEK_TO_LATEX[ch]) {
-      out += GREEK_TO_LATEX[ch];
+    const command = GREEK_TO_LATEX[ch] ?? (ch === "⟨" ? "\\langle" : ch === "⟩" ? "\\rangle" : undefined);
+    if (command) {
+      out += command;
       if (next && /[A-Za-z]/.test(next)) out += " "; // avoid merging into the next command name
       continue;
     }
@@ -102,8 +105,6 @@ function convertGreekAndSuperscript(str: string): string {
       out += `^{${SUPERSCRIPT_TO_LATEX[ch]}}`;
       continue;
     }
-    if (ch === "⟨") { out += "\\langle"; continue; }
-    if (ch === "⟩") { out += "\\rangle"; continue; }
     out += ch;
   }
   return out;
@@ -171,13 +172,13 @@ function promoteInlineEquationsInSegment(text: string): string {
     cursor = run.end;
   }
   parts.push(words.slice(cursor).join(" "));
-  return parts.join(" ").replace(/ *\n\n */g, "\n\n").trim();
+  return parts.join(" ").replace(/ *\n\n */g, "\n\n");
 }
 
 export function promoteInlineEquations(markdown: string): string {
   return markdown
     .split(PROTECTED_SPAN)
-    .map((part, index) => (index % 2 === 1 ? part : promoteInlineEquationsInSegment(part)))
+    .map((part, index) => index % 2 === 1 ? part : part.replace(/[^\r\n]+/g, promoteInlineEquationsInSegment))
     .join("");
 }
 
@@ -249,17 +250,6 @@ function fenceDisplayMathInSegment(text: string): string {
     .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n");
 }
 
-export function fenceDisplayMath(markdown: string): string {
-  const parts: string[] = [];
-  let cursor = 0;
-  for (const block of markdown.matchAll(CODE_FENCE_BLOCK)) {
-    parts.push(fenceDisplayMathInSegment(markdown.slice(cursor, block.index)), block[0]);
-    cursor = block.index + block[0].length;
-  }
-  parts.push(fenceDisplayMathInSegment(markdown.slice(cursor)));
-  return parts.join("").trim();
-}
-
 // A single stray/mismatched $ (e.g. the model drops one character from a
 // closing $$, or uses $ as a literal currency sign) makes remark-math hunt
 // for the next available delimiter to pair it with — however far away that
@@ -282,10 +272,66 @@ function hasBalancedDollarDelimiters(markdown: string): boolean {
   return doubleCount % 2 === 0 && singleCount % 2 === 0;
 }
 
+// TeX permits one infix fraction per group. When a comma-separated list
+// gives each item its own ungrouped \over, group the items independently.
+// Ignore commas and operators in nested groups. Leave alignments and
+// environments to the renderer, since their cells already have scopes.
+function groupInfixFractions(tex: string): string {
+  if (!tex.includes("\\over")) return tex;
+  const items: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let fractions = 0;
+  for (const { 0: token, index } of tex.matchAll(/\\[A-Za-z]+|\\[^\r\n]|[{},&%]/g)) {
+    if (token === "%") return tex;
+    if (token === "{" || token === "\\left") depth++;
+    if (token === "}" || token === "\\right") depth--;
+    if (depth < 0) return tex;
+    if (depth !== 0) continue;
+    if (token === "\\begin" || token === "&" || token === "\\\\") return tex;
+    if (token === "\\over") fractions++;
+    if (token === ",") {
+      if (fractions !== 1) return tex;
+      items.push(tex.slice(start, index));
+      start = index + 1;
+      fractions = 0;
+    }
+  }
+  if (depth !== 0 || fractions !== 1 || !items.length) return tex;
+  items.push(tex.slice(start));
+  return items.map((item) => {
+    const leading = /^(?:\s+|\\(?:qquad|quad)\b|\\[,;:! ])*/.exec(item)?.[0] ?? "";
+    const body = item.slice(leading.length);
+    const trimmed = body.trimEnd();
+    return `${leading}{${trimmed}}${body.slice(trimmed.length)}`;
+  }).join(",");
+}
+
+function repairInfixFractions(markdown: string): string {
+  return markdown.replace(PROTECTED_SPAN, (span) => {
+    if (!span.startsWith("$")) return span;
+    const size = span.startsWith("$$") ? 2 : 1;
+    const delimiter = span.slice(0, size);
+    return delimiter + groupInfixFractions(span.slice(size, -size)) + delimiter;
+  });
+}
+
 // `promote: false` keeps everything on the line it was written on — for
 // the reader's own short questions, where turning a mentioned "|0⟩" into a
 // centered display equation would blow a one-line bubble up into a block.
 export function normalizeMathNotation(markdown: string, { promote = true }: { promote?: boolean } = {}): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const block of markdown.matchAll(CODE_FENCE_BLOCK)) {
+    parts.push(normalizeMathInSegment(markdown.slice(cursor, block.index), promote), block[0]);
+    cursor = block.index + block[0].length;
+  }
+  parts.push(normalizeMathInSegment(markdown.slice(cursor), promote));
+  const normalized = parts.join("");
+  return promote ? normalized.trim() : normalized;
+}
+
+function normalizeMathInSegment(markdown: string, promote: boolean): string {
   // Fix literal "√" first — it never touches a "$", so it's safe to run
   // before the balance check and applies equally to already-$-wrapped math
   // (which the promotion passes below leave untouched) and bare prose.
@@ -302,7 +348,7 @@ export function normalizeMathNotation(markdown: string, { promote = true }: { pr
   if (!hasBalancedDollarDelimiters(markdown)) {
     return markdown.replace(/\$/g, "\\$");
   }
-  if (!promote) return autoWrapCaretExponents(markdown);
+  if (!promote) return repairInfixFractions(autoWrapCaretExponents(markdown));
   const upgraded = promoteSubstantialInlineMath(markdown);
   const normalized = autoWrapCaretExponents(promoteInlineEquations(upgraded));
   // Defense in depth: the passes above are expected to preserve balance on
@@ -312,5 +358,56 @@ export function normalizeMathNotation(markdown: string, { promote = true }: { pr
   if (!hasBalancedDollarDelimiters(normalized)) {
     return markdown.replace(/\$/g, "\\$");
   }
-  return fenceDisplayMath(normalized);
+  return fenceDisplayMathInSegment(repairInfixFractions(normalized));
+}
+
+const STATE_LABEL = "[\\p{L}\\p{N}_+′'−-]{1,24}";
+const MATRIX_OPERATOR = "[A-Z](?:[ \\t]*[†′'])?[ \\t]*";
+// Question labels and extracted quotes are plain text. Recover familiar
+// notation with a clear signal, leaving ordinary words and ambiguous glyphs
+// unchanged. In particular, a ket labeled "o" stays "o".
+const INLINE_NOTATION = new RegExp([
+  `[⟨〈<][ \\t]*${STATE_LABEL}[ \\t]*\\|[ \\t]*(?:(?:${MATRIX_OPERATOR}){1,6}\\|[ \\t]*)?${STATE_LABEL}[ \\t]*[⟩〉>]`,
+  `[⟨〈<]${STATE_LABEL}\\s*\\|`,
+  `(?:(?<![\\p{L}\\p{N}_])[A-Z][′'†]?)?\\|\\s*${STATE_LABEL}\\s*[⟩〉>]`,
+  "(?<![\\p{L}\\p{N}_])[A-Z](?:\\s*[:∶]\\s*[A-Z])?\\s*(?:→|->)\\s*[A-Z](?![\\p{L}\\p{N}_])",
+  "(?<![\\p{L}\\p{N}_])[A-Z](?:\\s*†|\\s*[′'](?![\\p{L}\\p{N}_]))",
+  "(?<![\\p{L}\\p{N}_])[A-Za-z]_[a-z0-9]{1,8}(?![\\p{L}\\p{N}_])",
+  "(?<==[ \\t]*)sum(?=\\s+[A-Za-z]_[a-z0-9])",
+].join("|"), "gu");
+
+function inlineNotationToTex(value: string): string {
+  if (value === "sum") return "\\sum";
+  const normalized = value.replace(/\s*(?:→|->)\s*/g, " \\to ")
+    .replace(/[〈<]/g, "⟨").replace(/[〉>]/g, "⟩")
+    .replace(/\s*†/g, "^{\\dagger}").replace(/\s*[′']/g, "'")
+    .replace(/∶/g, ":")
+    .replace(/_([a-z0-9]{1,8})/g, "_{$1}");
+  if (normalized.startsWith("⟨") && normalized.endsWith("⟩")) {
+    const [bra, middle, ket] = normalized.split("|").map((part) => part.trim());
+    return convertGreekAndSuperscript(ket === undefined ? bra + " \\mid " + middle : bra + " \\lvert " + middle + " \\rvert " + ket);
+  }
+  return convertGreekAndSuperscript(normalized);
+}
+
+export function inlineMathParts(text: string): { text: string; tex?: string }[] {
+  return text.split(PROTECTED_SPAN).flatMap((part, index) => {
+    if (!part) return [];
+    if (index % 2 === 1) {
+      if (part.startsWith("`")) return [{ text: part }];
+      const delimiterLength = part.startsWith("$$") ? 2 : 1;
+      const tex = part.slice(delimiterLength, -delimiterLength);
+      // A pair of currency amounts can look like an inline math span.
+      return delimiterLength === 1 && /^\d.*\s$/s.test(tex) ? [{ text: part }] : [{ text: part, tex: tex.trim() }];
+    }
+    const parts: { text: string; tex?: string }[] = [];
+    let start = 0;
+    for (const match of part.matchAll(INLINE_NOTATION)) {
+      if (match.index > start) parts.push({ text: part.slice(start, match.index) });
+      parts.push({ text: match[0], tex: inlineNotationToTex(match[0]) });
+      start = match.index + match[0].length;
+    }
+    if (start < part.length) parts.push({ text: part.slice(start) });
+    return parts;
+  });
 }

@@ -46,6 +46,9 @@ import { captureEntryId, type NotebookCapture } from "../notebook/model";
 import PersistentFlowPane from "./PersistentFlowPane";
 import { sendNativeDive } from "./nativeDives";
 import { openingMessage } from "../deepdive/prompts";
+import { getExperiments, useExperiments } from "../deepdive/experiments";
+import { DISCOVER_QUESTIONS } from "../deepdive/guided";
+import type { DiveTurnRequest } from "../deepdive/types";
 import { pageQuote, pageSelectionAnchor, samePage } from "../web/selection";
 import type { PageInteraction, PageMark } from "../web/browser";
 const NotebookDock = lazy(() => import("../notebook/NotebookDock"));
@@ -170,6 +173,8 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
   const [askFocus, setAskFocus] = useState(0);
   const [openThreadId, setOpenThreadId] = useState<string | null>(session.meta.view?.threadId ?? null);
   const [diveFocusId, setDiveFocusId] = useState<string | null>(() => { const id = session.meta.view?.nativeDiveFocus; return id && askStore.get(id)?.mode === "dive" ? id : null; });
+  const [diveTurnRequest, setDiveTurnRequest] = useState<DiveTurnRequest>();
+  const { guidedQuestions } = useExperiments();
   const [diveHighlightFocusId, setDiveHighlightFocusId] = useState<string | null>(null);
   const workspaceSlotRef = useRef<HTMLDivElement>(null), diveSlotRef = useRef<HTMLDivElement>(null);
   const [attachments, setAttachments] = useDraftAttachments(notebook.drafts, `ask:${openThreadId ?? "new-question"}`);
@@ -288,8 +293,8 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     flashTimer.current = setTimeout(() => setFlash(null), 2200);
     closeTip();
   };
-  const goTo = useEvent((anchor: FlowAnchor) => {
-    if (diveFocusId) {
+  const goTo = useEvent((anchor: FlowAnchor, options?: { keepQuestionOpen?: boolean }) => {
+    if (diveFocusId && !options?.keepQuestionOpen) {
       let root = askStore.get(diveFocusId);
       const seen = new Set<string>();
       while (root?.parentThreadId && !seen.has(root.id)) { seen.add(root.id); root = askStore.get(root.parentThreadId); }
@@ -475,10 +480,11 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
       const existing = findExisting();
       if (existing) return open(existing.id);
       const quote = anchorText(model, anchor).trim();
-      const thread = { ...newThread(quote.slice(0, 80) || "Deep Dive"), mode: "dive" as const, anchor, selection: quote, selectionImage: attached.find((attachment) => attachment.image)?.image };
+      const guided = getExperiments().guidedQuestions;
+      const thread: AskThread = { ...newThread(quote.slice(0, 80) || "Deep Dive"), mode: "dive", guided: guided ? "guide" : undefined, anchor, selection: quote, selectionImage: attached.find((attachment) => attachment.image)?.image };
       askStore.add(thread);
       open(thread.id);
-      await sendNativeDive(askStore, thread.id, openingMessage(quote), getAskContext(), session.diveControllers, { attachments: attached });
+      await sendNativeDive(askStore, thread.id, guided ? DISCOVER_QUESTIONS : openingMessage(quote), getAskContext(), session.diveControllers, { attachments: attached });
     })().catch((error) => { if (!controller.current.signal.aborted) showNotice(error instanceof Error ? error.message : "Couldn't start this dive."); }));
   });
   const diveFromAnswer = (text: string, sources: SourceRef[]) => {
@@ -704,7 +710,24 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     else if (capture.dive && askStore.get(capture.dive.panelId)?.mode === "dive") { setDiveFocusId(capture.dive.panelId); setDiveHighlightFocusId(capture.dive.id); }
     else if (capture.sources?.[0]) jumpSource({ source: capture.sources[0], range: [capture.sources[0].start, capture.sources[0].end] });
     else showNotice("The original source location wasn’t recorded. Your saved excerpt is kept here.");
-  }, onHoverCapture: (capture) => setHoveredAnnotationId(capture?.native?.id ?? null), onOpenConversation: (id, turnId) => { if (id.startsWith("glossary:")) { setPanel("glossary"); setGlossaryFocus({ entryId: id.slice(9), nonce: Date.now() }); return true; } const thread = askStore.get(id); if (!thread) return false; if (thread.mode === "dive") { setDiveFocusId(id); setPanel(null); } else { setOpenThreadId(id); setPanel("ask"); } setNotebookOpen(true); revealConversationTurn(turnId); return true; }, attachmentsForCapture: captureAttachments }}>
+  }, onHoverCapture: (capture) => setHoveredAnnotationId(capture?.native?.id ?? null), onOpenConversation: (id, turnId) => {
+    if (id.startsWith("glossary:")) {
+      setPanel("glossary"); setGlossaryFocus({ entryId: id.slice(9), nonce: Date.now() }); return true;
+    }
+    const thread = askStore.get(id);
+    if (!thread) return false;
+    if (thread.mode === "dive") {
+      setDiveTurnRequest(turnId ? { panelId: id, turnId } : undefined);
+      setDiveFocusId(id);
+      setPanel(null);
+    } else {
+      setOpenThreadId(id);
+      setPanel("ask");
+    }
+    setNotebookOpen(true);
+    revealConversationTurn(turnId);
+    return true;
+  }, attachmentsForCapture: captureAttachments }}>
   <div className="app-shell native-reader" onDragOver={(event) => { if ([...event.dataTransfer.types].includes("Files")) event.preventDefault(); }}
     onDrop={(event) => { if ((event.target as HTMLElement).closest(".notebook-dock")) return; if (event.dataTransfer.files.length) { event.preventDefault(); void openFile(event.dataTransfer.files[0]); } }}>
     <AppRail reflowable allowArea onHome={() => void leave().catch(() => showNotice("Couldn't save your reading position. Try again."))}
@@ -751,10 +774,14 @@ function NativeWorkspace({ session, onHome, onOpenDocument }: { session: Session
     {hoveredAnnotationId ? <style>{`.native-reader [data-annotation-id="${CSS.escape(hoveredAnnotationId)}"] { box-shadow: 0 0 0 2px var(--rphp-accent, #5b50e6); }`}</style> : null}
     <div className="app-main native-workspace">
       {diveFocusId ? <Suspense fallback={<p className="reader-loading">Opening Deep Dive…</p>}><NativeDiveView store={askStore} engine={engine} notebook={notebook} getContext={getAskContext} controllers={session.diveControllers}
-        focusId={diveFocusId} onFocus={setDiveFocusId} onReturn={(id) => { const thread = askStore.get(id); setDiveFocusId(id); if (thread?.anchor) goTo(thread.anchor); }} rootSlotRef={diveSlotRef}
+        focusId={diveFocusId} turnRequest={diveTurnRequest} onFocus={setDiveFocusId} onReturn={(id, options) => {
+          const thread = askStore.get(id);
+          if (!options?.keepQuestionOpen) setDiveFocusId(id);
+          if (thread?.anchor) goTo(thread.anchor, options);
+        }} rootSlotRef={diveSlotRef}
         onJumpToSource={jumpSource} onJob={trackJob} highlightFocusId={diveHighlightFocusId} /></Suspense> : <div className="native-source-slot" ref={workspaceSlotRef} />}
     </div>
-    <PersistentFlowPane workspace={workspaceSlotRef} dive={diveSlotRef} focused={diveFocusId}>
+    <PersistentFlowPane workspace={workspaceSlotRef} dive={diveSlotRef} focused={diveFocusId} guidedQuestions={guidedQuestions}>
     <main className="app-main flow-pane native-source-pane">
       {canShowPage && pageUrl ? <div className="web-document-toolbar">
         <div className="web-document-modes" role="group" aria-label="Document view">

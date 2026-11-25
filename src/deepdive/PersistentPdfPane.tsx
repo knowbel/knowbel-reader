@@ -74,6 +74,7 @@ function applyScrollIntent(scrollEl: HTMLElement, intent: ScrollIntent) {
 export default function PersistentPdfPane({
   pdfPaneProps,
   dockTarget,
+  guidedLayout,
   workspaceSlotRef,
   deepDiveRootSlotRef,
   highlighterUtilsRef,
@@ -81,6 +82,7 @@ export default function PersistentPdfPane({
 }: {
   pdfPaneProps: PdfPaneProps;
   dockTarget: DockTarget;
+  guidedLayout: boolean;
   workspaceSlotRef: RefObject<HTMLDivElement>;
   deepDiveRootSlotRef: RefObject<HTMLDivElement>;
   highlighterUtilsRef: RefObject<PdfHighlighterUtils | null>;
@@ -179,7 +181,7 @@ export default function PersistentPdfPane({
         USER_INTERACTION_EVENTS.forEach((evt) => scrollEl?.removeEventListener(evt, stopCorrecting));
       };
     }
-  }, [dockTarget, workspaceSlotRef, deepDiveRootSlotRef, highlighterUtilsRef]);
+  }, [dockTarget, guidedLayout, workspaceSlotRef, deepDiveRootSlotRef, highlighterUtilsRef]);
 
   // Unmounted when another document opens (App keys this by document), so
   // the next one gets a fresh viewer: take this one's host out of its slot.

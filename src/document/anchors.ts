@@ -2,12 +2,14 @@ import type { FlowAnchor, FlowDocument, FlowNode, TextAnchor, TextPoint } from "
 
 export interface BlockRange { blockId: string; start: number; end: number }
 
-const maps = new WeakMap<FlowDocument, { blocks: Map<string, FlowDocument["blocks"][number]>; indices: Map<string, number>; objects: Map<string, FlowDocument["objects"][number]> }>();
+export type SourceExcerptPart = { kind: "text"; value: string } | { kind: "math"; value: string; display: boolean };
+
+const maps = new WeakMap<FlowDocument, { blocks: Map<string, FlowDocument["blocks"][number]>; indices: Map<string, number>; objects: Map<string, FlowDocument["objects"][number]>; excerpts: WeakMap<FlowAnchor, SourceExcerptPart[]> }>();
 function lookup(document: FlowDocument) {
   let cached = maps.get(document);
   if (!cached) {
     cached = { blocks: new Map(document.blocks.map((block) => [block.id, block])), indices: new Map(document.blocks.map((block, index) => [block.id, index])),
-      objects: new Map(document.objects.map((object) => [`${object.blockId}/${object.id}`, object])) };
+      objects: new Map(document.objects.map((object) => [`${object.blockId}/${object.id}`, object])), excerpts: new WeakMap() };
     maps.set(document, cached);
   }
   return cached;
@@ -49,6 +51,36 @@ export function anchorText(document: FlowDocument, anchor: FlowAnchor): string {
   return anchorRanges(document, anchor).map((range) =>
     lookup(document).blocks.get(range.blockId)!.text.slice(range.start, range.end),
   ).join("\n");
+}
+
+// Use the source's math nodes and their canonical offsets. Keep partially
+// selected math as exact text, just like any other partial range.
+export function anchorExcerpt(document: FlowDocument, anchor: FlowAnchor): SourceExcerptPart[] {
+  const { blocks, excerpts } = lookup(document);
+  const cached = excerpts.get(anchor);
+  if (cached) return cached;
+  const resolved = resolveAnchor(document, anchor);
+  const parts: SourceExcerptPart[] = [];
+  for (const range of resolved ? anchorRanges(document, resolved) : []) {
+    const block = blocks.get(range.blockId)!;
+    if (parts.length) parts.push({ kind: "text", value: "\n" });
+    let cursor = range.start;
+    const addTextThrough = (end: number) => {
+      if (end > cursor) parts.push({ kind: "text", value: block.text.slice(cursor, end) });
+      cursor = end;
+    };
+    const visit = (node: FlowNode) => {
+      if (node.type === "element") node.children.forEach(visit);
+      if (node.type !== "math" || !node.value || node.start < cursor || node.start + node.value.length > range.end) return;
+      addTextThrough(node.start);
+      parts.push({ kind: "math", value: node.value, display: node.display });
+      cursor = node.start + node.value.length;
+    };
+    visit(block.content);
+    addTextThrough(range.end);
+  }
+  excerpts.set(anchor, parts);
+  return parts;
 }
 
 export function textAnchor(document: FlowDocument, start: TextPoint, end: TextPoint): TextAnchor {

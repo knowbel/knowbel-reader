@@ -11,7 +11,7 @@ import { getBm25, getChunks, getSections, getTextIndex, type TextDocument } from
 import type { CommentedHighlight } from "../types";
 import { getXrefIndex } from "../xref/xrefIndex";
 import { contextStrategy, type DiveExperiments } from "./experiments";
-import type { DivePromptOptions } from "./prompts";
+import { selectionForPrompt, type DivePromptOptions } from "./prompts";
 import { readerNotesBlock } from "./readerNotes";
 import { rootPanelOf } from "./tree";
 import type { DivePanel, DiveTurn } from "./types";
@@ -103,9 +103,11 @@ export async function prepareDiveSources(
       return { sources, splitAt: x.stableSources ? (panel.baseSources?.length || sources.length) : undefined };
     }
     if (reused) return reused;
-    const strategy = contextStrategy(x);
-    const nested = Boolean(panel.parentId);
-    const linking = x.linkedSources || x.nestedContext || x.areaContext;
+    const guide = panel.guided === "question" ? rootPanelOf(ctx.panels, panel.id) : null;
+    const anchorPanel = guide?.guided === "guide" ? guide : panel;
+    const strategy = { ...contextStrategy(x), ...(panel.guided ? { localWindow: true, areaContext: true } : {}) };
+    const nested = Boolean(panel.parentId) && anchorPanel === panel;
+    const linking = x.linkedSources || x.nestedContext || strategy.areaContext;
     const [bm25, xref, sections] = await Promise.all([
       getBm25(ctx.pdf),
       linking ? getXrefIndex(ctx.pdf).catch(() => null) : null,
@@ -113,15 +115,15 @@ export async function prepareDiveSources(
     ]);
     const root = nested ? rootPanelOf(ctx.panels, panel.id) : null;
     const rootPage = root ? panelPage(ctx, root) : undefined;
-    const anchorHighlight = panel.anchorHighlightId ? ctx.highlights.find((h) => h.id === panel.anchorHighlightId) : undefined;
-    const region = x.areaContext && !nested && panel.selectionImage ? (panel.region ?? anchorHighlight?.position.boundingRect) : undefined;
+    const anchorHighlight = anchorPanel.anchorHighlightId ? ctx.highlights.find((h) => h.id === anchorPanel.anchorHighlightId) : undefined;
+    const region = strategy.areaContext && !nested && anchorPanel.selectionImage ? (anchorPanel.region ?? anchorHighlight?.position.boundingRect) : undefined;
     const attached = attachmentSources(options.attachments, index);
     const input = {
       index,
       chunks,
       bm25,
-      selection: panel.selection,
-      pageNumber: nested ? null : (panelPage(ctx, panel) ?? null),
+      selection: anchorPanel.selection,
+      pageNumber: nested ? null : (panelPage(ctx, anchorPanel) ?? null),
       inherited: panel.inheritedSources,
       attached,
       extraQuery: attachmentQuery(options.attachments),
@@ -141,7 +143,7 @@ export async function prepareDiveSources(
       );
       return { sources, splitAt: panel.baseSources.length };
     }
-    const sources = buildDiveSources({ ...input, question: isFirstMessage ? undefined : content }, options.wider ? { typicalChars: 12000, ceilingChars: 40000 } : undefined, strategy);
+    const sources = buildDiveSources({ ...input, question: isFirstMessage && panel.guided !== "question" ? undefined : content }, options.wider ? { typicalChars: 12000, ceilingChars: 40000 } : undefined, strategy);
     return { sources, splitAt: x.stableSources ? sources.length : undefined };
   } catch {
     return reused;
@@ -161,12 +163,13 @@ export function divePromptOptions(
   const root = panel.parentId ? rootPanelOf(ctx.panels, panel.id) : panel;
   const rootPage = root ? panelPage(ctx, root) : undefined;
   let rootInfo: DivePromptOptions["root"];
-  if (x.rootAnchor && panel.parentId && root) {
-    const answer = firstAnswer(root);
+  if ((x.rootAnchor || panel.guided === "question") && panel.parentId && root) {
+    const answer = root.guided === "guide" ? undefined : firstAnswer(root);
     const text = answer ? markersToPages(answer.content, answer.sources ?? [], ctx.pageLabel) : "";
     rootInfo = {
-      selection: root.selection || "(a selected region of the page)",
+      selection: selectionForPrompt(root) || "(a selected region of the page)",
       page: rootPage !== undefined ? ctx.pageLabel(rootPage) : undefined,
+      ...(panel.guided === "question" && root.selectionImage ? { image: true } : {}),
       firstAnswer: text ? (text.length > ROOT_ANSWER_CHARS ? `${text.slice(0, ROOT_ANSWER_CHARS)}…` : text) : undefined,
     };
   }
@@ -208,8 +211,10 @@ export function divePromptOptions(
       }) || undefined;
   }
   return {
-    ...(x.orientationFirst ? { orientationFirst: true } : {}),
-    ...(x.orientationFirst ? { opening: panel.turns.filter((turn) => turn.role === "user").length === 1 } : {}),
+    ...(x.orientationFirst || panel.guided === "question" ? {
+      orientationFirst: true,
+      opening: panel.turns.filter((turn) => turn.role === "user").length === 1,
+    } : {}),
     ...(x.suggestions ? { suggestions: true } : {}),
     ...(x.diagrams ? { diagrams: true } : {}),
     ...(options.diagram ? { diagram: true } : {}),

@@ -1,11 +1,13 @@
 import type { Attachment, RegionRect } from "../grounding/attachments.ts";
 import type { SourceRef } from "../grounding/types.ts";
 import type { DiveSuggestion } from "./suggestions.ts";
+import type { SourceExcerptPart } from "../document/anchors.ts";
 
 export interface DiveTurn {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  shortAnswerEnd?: number; // end of the standalone answer within content
   at: string; // ISO timestamp
   // On a grounded assistant turn: the passages it was given, which its
   // [S1]-style citation markers refer to. Absent on turns from before
@@ -16,6 +18,7 @@ export interface DiveTurn {
   // Set only by the Deep Dive experiments (experiments.ts):
   suggestions?: DiveSuggestion[]; // on an answer: where to go next (suggestions)
   diagram?: boolean; // on a reader's turn: it asked for a diagram (diagrams)
+  simplify?: boolean; // on a reader's turn: a simpler version of this question's answer
   status?: "error" | "cancelled";
   error?: string;
 }
@@ -26,10 +29,12 @@ export interface DiveImage {
 }
 
 export interface DivePanel {
+  guided?: "guide" | "question";
   id: string;
   parentId: string | null; // null = anchored directly to the PDF (root)
   anchorHighlightId: string | null; // set iff parentId is null
   selection: string; // exact phrase dived into; empty for an area/image-only highlight
+  selectionParts?: SourceExcerptPart[]; // native source math projected from a saved anchor
   selectionImage?: DiveImage; // screenshot for an area highlight dive; resent on every turn
   label: string; // selection, truncated to 60 chars
   contextText: string; // page(+prev page) text (root) or parent turn text (nested)
@@ -61,7 +66,13 @@ export interface DiveTreeSummary {
 export interface DiveJobState {
   phase: "preparing" | "streaming";
   text: string;
+  shortAnswerEnd?: number;
   sources?: SourceRef[];
+}
+
+export interface DiveTurnRequest {
+  panelId: string;
+  turnId: string;
 }
 
 export interface SummaryJobState {

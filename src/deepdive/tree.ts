@@ -81,9 +81,9 @@ export function appendTurn(
   panel: DivePanel,
   role: DiveTurn["role"],
   content: string,
-  extra: Pick<DiveTurn, "sources" | "attachments" | "suggestions" | "diagram" | "status" | "error"> = {},
+  extra: Pick<DiveTurn, "sources" | "attachments" | "suggestions" | "diagram" | "simplify" | "shortAnswerEnd" | "status" | "error"> = {},
 ): DivePanel {
-  const { sources, attachments, suggestions, diagram, status, error } = extra;
+  const { sources, attachments, suggestions, diagram, simplify, shortAnswerEnd, status, error } = extra;
   return {
     ...panel,
     turns: [
@@ -97,6 +97,8 @@ export function appendTurn(
         ...(attachments?.length ? { attachments } : {}),
         ...(suggestions?.length ? { suggestions } : {}),
         ...(diagram ? { diagram } : {}),
+        ...(simplify ? { simplify } : {}),
+        ...(shortAnswerEnd !== undefined ? { shortAnswerEnd } : {}),
         ...(status ? { status } : {}),
         ...(error ? { error } : {}),
       },

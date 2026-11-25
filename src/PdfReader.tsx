@@ -34,7 +34,7 @@ import type { CommentedHighlight } from "./types";
 import "./App.css";
 import PersistentPdfPane from "./deepdive/PersistentPdfPane";
 import DeepDiveView from "./deepdive/DeepDiveView";
-import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, SummaryJobState } from "./deepdive/types";
+import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, DiveTurnRequest, SummaryJobState } from "./deepdive/types";
 import {
   ancestorChain,
   appendTurn,
@@ -61,7 +61,8 @@ import { sentenceAround, type XrefRef, type XrefTarget } from "./xref/detect";
 import { cropTarget } from "./xref/preview";
 import { DocDataWriter } from "./storage/docDataWriter";
 import { buildDivePrompt, openingMessage } from "./deepdive/prompts";
-import { getExperiments } from "./deepdive/experiments";
+import { getExperiments, useExperiments } from "./deepdive/experiments";
+import { createGuidedQuestion, DISCOVER_QUESTIONS, forDiveRequest, guidedReply, guidedRoot, streamingGuidedAnswer, type GuidedQuestionRequest } from "./deepdive/guided";
 import { divePromptOptions, prepareDiveSources, type DiveRequestContext } from "./deepdive/diveRequest";
 import { labelWithRegistry } from "./deepdive/sourceRegistry";
 import { abortable } from "./deepdive/job";
@@ -211,6 +212,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const setHighlights = notebook.setPdfHighlights;
   const [notebookOpen, setNotebookOpen] = useState(true);
   const [panels, setPanels] = useState<DivePanel[]>([]);
+  const { guidedQuestions } = useExperiments();
   const [diveJobs, setDiveJobs] = useState<Record<string, DiveJobState>>({});
   const [summaryJobs, setSummaryJobs] = useState<Record<string, SummaryJobState>>({});
   const summaryControllers = useRef(new Map<string, AbortController>());
@@ -227,6 +229,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   const diveHighlights = useDiveMarks(notebook);
   const setDiveHighlights = notebook.setDiveHighlights;
   const [diveFocusId, setDiveFocusId] = useState<string | null>(null);
+  const [diveTurnRequest, setDiveTurnRequest] = useState<DiveTurnRequest>();
   // Read by the PDF's highlights, which render in their own React roots
   // (inside react-pdf-highlighter) and so can't rely on fresh props.
   const diveFocusIdRef = useRef(diveFocusId);
@@ -990,7 +993,8 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
 
     const focus = diveFocusIdRef.current;
     let delay = 0;
-    if (focus && !paneWindow(ancestorChain(panelsRef.current, focus, loadedPdf.fileName)).some((e) => e.id === null)) {
+    if (focus && !(getExperiments().guidedQuestions && guidedRoot(panelsRef.current, focus)) &&
+        !paneWindow(ancestorChain(panelsRef.current, focus, loadedPdf.fileName)).some((e) => e.id === null)) {
       const root = rootPanelOf(panelsRef.current, focus);
       if (root) {
         setDiveFocusId(root.id);
@@ -1289,11 +1293,13 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       setDiveJobs((jobs) => ({ ...jobs, [panelId]: { phase: "preparing", text: "" } }));
       const active = () => diveControllers.current.get(panelId) === controller && !controller.signal.aborted;
       const parentPanel = panel.parentId ? panelById(panelsRef.current, panel.parentId) : null;
+      const image = panel.selectionImage ?? (panel.guided === "question" ? guidedRoot(panelsRef.current, panelId)?.selectionImage : undefined);
       const ctx = diveRequestContext();
       const experiments = ctx?.experiments ?? getExperiments();
       const attachments = options.attachments ?? [];
       const prior = options.retry ? { ...panel, turns: panel.turns.slice(0, -1) } : panel;
-      const withUserTurn = options.retry ? prior : appendTurn(prior, "user", content, { attachments, diagram: options.diagram });
+      const withUserTurn = options.retry ? prior : appendTurn(prior, "user", content, { attachments, diagram: options.diagram, simplify: options.simplify });
+      const requestPanel = forDiveRequest(withUserTurn, content);
       panelsRef.current = replacePanel(panelsRef.current, withUserTurn);
       setPanels((prev) => replacePanel(prev, withUserTurn));
       let streamed = "";
@@ -1308,14 +1314,14 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
           : "";
         let prepared = await abortable(prefetched ?? prepareDiveSources(ctx, prior, [content, expansionContext].filter(Boolean).join(" "), { reuse: options.reuseSources ?? false, attachments, wider: options.wider }), controller.signal);
         if (!active()) throw new Error("Request stopped.");
-        if (!prepared && options.generalAllowed) prepared = { sources: [] };
+        if (!prepared && (options.generalAllowed || requestPanel.guided === "guide" || image && requestPanel.guided)) prepared = { sources: [] };
         if (!prepared) throw new Error("The document text could not be prepared. Please retry.");
         const labeled = labelWithRegistry(prepared.sources, prior.sourceRegistry ?? []);
         const sources = labeled.sources;
         options.onSources?.(sources);
         setDiveJobs((jobs) => ({ ...jobs, [panelId]: { phase: "streaming", text: "", sources } }));
         const attachedLabels = attachments.length ? sources.filter((s) => s.via === "attached" || (!s.via && !s.chunkId)).map((s) => s.label) : [];
-        if (!sources.length && !panel.selectionImage && !attachments.some((attachment) => attachment.image) && !options.generalAllowed) {
+        if (!sources.length && !image && !attachments.some((attachment) => attachment.image) && !options.generalAllowed && requestPanel.guided !== "guide") {
           setPanels((prev) => {
             const latest = panelById(prev, panelId);
             return latest ? replacePanel(prev, appendTurn(latest, "assistant", "[not-covered] The passages I found don't answer this question.", { sources })) : prev;
@@ -1328,7 +1334,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
           const answer = turns[index + 1];
           return turn.role === "user" && !sentTurns.has(turn) && answer?.role === "assistant" && !answer.status && !answer.content.startsWith("⚠️");
         }).map((turn) => turn.content.slice(0, 500)).slice(-8);
-        const prompt = buildDivePrompt(loadedPdf.fileName, withUserTurn, parentPanel, {
+        const prompt = buildDivePrompt(loadedPdf.fileName, requestPanel, parentPanel, {
           sources, pageLabel: pageLabelFor,
           attachmentNote: attachmentInstructions(attachments, attachedLabels, pageLabelFor),
         }, { ...divePromptOptions(ctx, withUserTurn, sources, { splitAt: prepared.splitAt, diagram: options.diagram }), generalAllowed: options.generalAllowed, earlierQuestions });
@@ -1336,7 +1342,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         const messages = sent.map((turn, index) => ({
           role: turn.role,
           content: turn.role === "assistant" ? markersToPages(turn.content, turn.sources ?? [], pageLabelFor) : turn.content,
-          ...(index === 0 && panel.selectionImage ? { image: panel.selectionImage } : {}),
+          ...(index === 0 && image ? { image } : {}),
           ...(index === sent.length - 1 && images.length ? { images } : {}),
         }));
         const full = await streamDiveReply({
@@ -1346,17 +1352,19 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
             if (!active()) return;
             streamed += chunk;
             onChunk?.(chunk);
-            setDiveJobs((jobs) => jobs[panelId] ? { ...jobs, [panelId]: { ...jobs[panelId], text: streamed } } : jobs);
+            const { content: text, shortAnswerEnd } = requestPanel.guided === "question" ? streamingGuidedAnswer(streamed) : { content: streamed };
+            setDiveJobs((jobs) => jobs[panelId] ? { ...jobs, [panelId]: { ...jobs[panelId], text, shortAnswerEnd } } : jobs);
           },
         });
         if (!active()) throw new Error("Request stopped.");
-        const { body, suggestions } = experiments.suggestions ? splitSuggestions(full) : { body: full, suggestions: [] };
-        const merged = experiments.suggestions && !options.diagram ? mergeSuggestions(suggestions, sources) : [];
+        const reply: ReturnType<typeof guidedReply> = requestPanel.guided ? guidedReply(requestPanel, full) : experiments.suggestions ? splitSuggestions(full) : { body: full, suggestions: [] };
+        const { body, suggestions, shortAnswerEnd } = reply;
+        const merged = options.diagram ? [] : requestPanel.guided ? suggestions : experiments.suggestions ? mergeSuggestions(suggestions, sources) : [];
         if (!body.trim()) throw new Error("The model returned an empty answer. Try asking again.");
         setPanels((prev) => {
           const latest = panelById(prev, panelId);
           if (!latest) return prev;
-          const answered = appendTurn(latest, "assistant", body, { sources, suggestions: merged });
+          const answered = appendTurn(latest, "assistant", body, { sources, suggestions: merged, shortAnswerEnd });
           const withBase = { ...answered, sourceRegistry: labeled.registry, ...(experiments.stableSources && !answered.baseSources ? { baseSources: sources } : {}) };
           return replacePanel(prev, withBase);
         });
@@ -1365,10 +1373,11 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         if (diveControllers.current.get(panelId) !== controller) return;
         const cancelled = controller.signal.aborted;
         const message = cancelled ? "Stopped. You can retry this question." : err instanceof Error ? err.message : "Dive reply failed.";
+        const partial = requestPanel.guided === "question" ? streamingGuidedAnswer(streamed).content : streamed;
         setPanels((prev) => {
           const latest = panelById(prev, panelId);
           if (!latest) return prev;
-          return replacePanel(prev, appendTurn(latest, "assistant", streamed ? `${streamed}\n\n${message}` : message, { status: cancelled ? "cancelled" : "error", error: message }));
+          return replacePanel(prev, appendTurn(latest, "assistant", partial ? `${partial}\n\n${message}` : message, { status: cancelled ? "cancelled" : "error", error: message }));
         });
       } finally {
         if (diveControllers.current.get(panelId) === controller) {
@@ -1416,6 +1425,10 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
   // its own (see explainXref); otherwise it opens on the selection.
   const createAndOpenDive = useCallback(
     (panel: DivePanel, firstMessage?: string, attachments?: Attachment[]) => {
+      if (!panel.parentId && !firstMessage && getExperiments().guidedQuestions) {
+        panel = { ...panel, guided: "guide" };
+        firstMessage = DISCOVER_QUESTIONS;
+      }
       // panelsRef is updated synchronously (not via the panels-syncing effect,
       // which hasn't run yet) so the immediate sendDiveMessage call below can
       // find this panel — it looks the panel up through the ref, not state.
@@ -1426,6 +1439,16 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     },
     [sendDiveMessage],
   );
+
+  const openGuidedQuestion = (request: GuidedQuestionRequest) => {
+    const parent = panelById(panelsRef.current, request.parentId);
+    if (!parent) return;
+    const question = createGuidedQuestion(parent, request, pageLabelFor);
+    panelsRef.current = [...panelsRef.current, question];
+    setPanels(panelsRef.current);
+    void sendDiveMessage(question.id, request.question, undefined, { attachments: request.attachments, diagram: request.diagram });
+    return question.id;
+  };
 
   // A cross-reference's target, shown: flashed when it has a text anchor
   // (a theorem's label, an equation number, a caption), else scrolled to.
@@ -1819,9 +1842,10 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     onZoomChange: setPdfScaleValue,
   };
 
+  const guidedLayout = Boolean(guidedQuestions && diveFocusId && guidedRoot(panels, diveFocusId));
   const dockTarget = !diveFocusId
     ? "workspace"
-    : paneWindow(ancestorChain(panels, diveFocusId, loadedPdf.fileName)).some(
+    : guidedLayout || paneWindow(ancestorChain(panels, diveFocusId, loadedPdf.fileName)).some(
         (entry) => entry.id === null,
       )
       ? "deep-dive-root"
@@ -1866,7 +1890,12 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
       else if (capture.sources?.[0]) jumpToSource({ source: capture.sources[0], range: [capture.sources[0].start, capture.sources[0].end] });
       else showNotice("The original source location wasn’t recorded. Your saved excerpt is kept here.");
     }, onHoverCapture: (capture) => setHoveredHighlightId(capture?.pdf?.id ?? null), onOpenConversation: (id, turnId) => {
-      if (panelsRef.current.some((panel) => panel.id === id)) { setDiveFocusId(id); revealConversationTurn(turnId); return true; }
+      if (panelsRef.current.some((panel) => panel.id === id)) {
+        setDiveTurnRequest(turnId ? { panelId: id, turnId } : undefined);
+        setDiveFocusId(id);
+        revealConversationTurn(turnId);
+        return true;
+      }
       if (id.startsWith("glossary:")) { setActiveSidebarPanel("glossary"); setGlossaryFocusRequest({ entryId: id.slice(9), nonce: Date.now() }); return true; }
       if (askStore.get(id)) { setOpenAskThreadId(id); setActiveSidebarPanel("ask"); setNotebookOpen(true); revealConversationTurn(turnId); return true; }
       return false;
@@ -1945,10 +1974,10 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
             summaryJobs={summaryJobs}
             onCancelSummary={(id) => summaryControllers.current.get(id)?.abort()}
             onCancel={(id) => diveControllers.current.get(id)?.abort()}
-            onReturnToPassage={(id) => {
+            onReturnToPassage={(id, options) => {
               const root = panelById(panelsRef.current, id);
               const highlight = highlightsRef.current.find((item) => item.id === root?.anchorHighlightId);
-              setDiveFocusId(id);
+              if (!options?.keepQuestionOpen) setDiveFocusId(id);
               if (highlight) window.setTimeout(() => jumpToHighlight(highlight), 100);
               else if (root?.pageNumber) {
                 setCurrentPage(root.pageNumber);
@@ -1959,10 +1988,12 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
             diveHighlights={diveHighlights}
             scrolledToDiveHighlightId={scrolledToDiveHighlightId}
             focusId={diveFocusId}
+            turnRequest={diveTurnRequest}
             rootLabel={loadedPdf.fileName}
             onFocusChange={setDiveFocusId}
             rootSlotRef={deepDiveRootSlotRef}
             onSendMessage={sendDiveMessage}
+            onCreateGuidedQuestion={openGuidedQuestion}
             onNestedDive={handleNestedDive}
             onSuggestedDive={handleSuggestedDive}
             onSummarizeTree={summarizeDiveTree}
@@ -1997,6 +2028,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
         key={loadedPdf.docId}
         pdfPaneProps={pdfPaneProps}
         dockTarget={dockTarget}
+        guidedLayout={guidedLayout}
         workspaceSlotRef={workspaceSlotRef}
         deepDiveRootSlotRef={deepDiveRootSlotRef}
         highlighterUtilsRef={highlighterUtilsRef}

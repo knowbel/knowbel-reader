@@ -1,12 +1,14 @@
 import { useState, type RefObject } from "react";
 import { FileText } from "lucide-react";
-import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, SummaryJobState } from "./types";
+import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, DiveTurnRequest, SummaryJobState } from "./types";
 import type { Attachment } from "../grounding/attachments";
 import { ancestorChain, paneWindow, panelById } from "./tree";
 import DivePanelPane, { type DivePanelPaneProps } from "./DivePanelPane";
 import { useExperiments } from "./experiments";
 import DiveMap from "./DiveMap";
 import TreeSummaryPanel from "./TreeSummaryPanel";
+import GuidedDiveView from "./GuidedDiveView";
+import { guidedRoot, type GuidedQuestionRequest } from "./guided";
 
 export interface DeepDiveViewProps {
   panels: DivePanel[];
@@ -14,15 +16,17 @@ export interface DeepDiveViewProps {
   summaryJobs: Record<string, SummaryJobState>;
   onCancelSummary: (rootId: string) => void;
   onCancel: (panelId: string) => void;
-  onReturnToPassage: (rootId: string) => void;
+  onReturnToPassage: DivePanelPaneProps["onReturnToPassage"];
   scrollPositions: Map<string, number>;
   diveHighlights: DiveHighlight[];
   scrolledToDiveHighlightId: string | null;
   focusId: string;
+  turnRequest?: DiveTurnRequest;
   rootLabel: string;
   onFocusChange: (id: string | null) => void;
   rootSlotRef: RefObject<HTMLDivElement>;
   onSendMessage: DivePanelPaneProps["onSendMessage"];
+  onCreateGuidedQuestion: (request: GuidedQuestionRequest) => string | undefined;
   onNestedDive: (request: { parentId: string; selection: string; contextText: string } & DiveHighlightPlacement) => void;
   onSuggestedDive: DivePanelPaneProps["onSuggestedDive"];
   onSummarizeTree: (rootId: string) => Promise<void>;
@@ -49,42 +53,71 @@ export interface DeepDiveViewProps {
 
 const NO_ATTACHMENTS: Attachment[] = [];
 
-export default function DeepDiveView({
-  panels,
-  jobs,
-  summaryJobs,
-  onCancelSummary,
-  onCancel,
-  onReturnToPassage,
-  scrollPositions,
-  diveHighlights,
-  scrolledToDiveHighlightId,
-  focusId,
-  rootLabel,
-  onFocusChange,
-  rootSlotRef,
-  onSendMessage,
-  onNestedDive,
-  onSuggestedDive,
-  onSummarizeTree,
-  pageLabel,
-  onJumpToSource,
-  attachments,
-  onAddToQuestion,
-  onRemoveAttachment,
-  onClearAttachments,
-  onAddHighlight,
-  onEditHighlight,
-  onDeleteHighlight,
-  onDiveFromHighlight,
-  onPin,
-}: DeepDiveViewProps) {
+export default function DeepDiveView(props: DeepDiveViewProps) {
+  const {
+    panels,
+    jobs,
+    summaryJobs,
+    onCancelSummary,
+    onCancel,
+    onReturnToPassage,
+    scrollPositions,
+    diveHighlights,
+    scrolledToDiveHighlightId,
+    focusId,
+    rootLabel,
+    onFocusChange,
+    rootSlotRef,
+    onSendMessage,
+    onNestedDive,
+    onSuggestedDive,
+    onSummarizeTree,
+    pageLabel,
+    onJumpToSource,
+    attachments,
+    onAddToQuestion,
+    onRemoveAttachment,
+    onClearAttachments,
+    onAddHighlight,
+    onEditHighlight,
+    onDeleteHighlight,
+    onDiveFromHighlight,
+    onPin,
+  } = props;
   const experiments = useExperiments();
   const [summaryOpenFor, setSummaryOpenFor] = useState<string | null>(null);
   const chain = ancestorChain(panels, focusId, rootLabel);
   const paneEntries = paneWindow(chain);
   // The dive this tree started from (chain[0] is the PDF itself).
   const root = chain[1]?.id ? panelById(panels, chain[1].id) : null;
+  const paneProps = (id: string): DivePanelPaneProps => ({
+    panel: panelById(panels, id)!,
+    job: jobs[id],
+    onCancel,
+    onReturnToPassage,
+    scrollPositions,
+    allPanels: panels,
+    diveHighlights,
+    scrolledToDiveHighlightId,
+    focusedPanelId: focusId,
+    onOpenDive: onFocusChange,
+    onSendMessage,
+    onNestedDive,
+    onSuggestedDive,
+    pageLabel,
+    onJumpToSource,
+    attachments: attachments[id] ?? NO_ATTACHMENTS,
+    onAddToQuestion: (kind, text, pageNumber) => onAddToQuestion(id, kind, text, pageNumber),
+    onRemoveAttachment: (attachmentId) => onRemoveAttachment(id, attachmentId),
+    onClearAttachments: () => onClearAttachments(id),
+    onAddHighlight,
+    onEditHighlight,
+    onDeleteHighlight,
+    onDiveFromHighlight,
+    onPin,
+  });
+  const guide = experiments.guidedQuestions ? guidedRoot(panels, focusId) : null;
+  if (guide) return <GuidedDiveView {...props} guide={guide} paneProps={paneProps} diagrams={experiments.diagrams} />;
 
   return (
     <div className="deep-dive-view">
@@ -141,32 +174,7 @@ export default function DeepDiveView({
             {entry.id === null ? (
               <div className="pdf-pane-slot" ref={rootSlotRef} />
             ) : (
-              <DivePanelPane
-                panel={panelById(panels, entry.id)!}
-                job={jobs[entry.id]}
-                onCancel={onCancel}
-                onReturnToPassage={onReturnToPassage}
-                scrollPositions={scrollPositions}
-                allPanels={panels}
-                diveHighlights={diveHighlights}
-                scrolledToDiveHighlightId={scrolledToDiveHighlightId}
-                focusedPanelId={focusId}
-                onOpenDive={onFocusChange}
-                onSendMessage={onSendMessage}
-                onNestedDive={onNestedDive}
-                onSuggestedDive={onSuggestedDive}
-                pageLabel={pageLabel}
-                onJumpToSource={onJumpToSource}
-                attachments={attachments[entry.id] ?? NO_ATTACHMENTS}
-                onAddToQuestion={(kind, text, pageNumber) => onAddToQuestion(entry.id!, kind, text, pageNumber)}
-                onRemoveAttachment={(id) => onRemoveAttachment(entry.id!, id)}
-                onClearAttachments={() => onClearAttachments(entry.id!)}
-                onAddHighlight={onAddHighlight}
-                onEditHighlight={onEditHighlight}
-                onDeleteHighlight={onDeleteHighlight}
-                onDiveFromHighlight={onDiveFromHighlight}
-                onPin={onPin}
-              />
+              <DivePanelPane {...paneProps(entry.id)} />
             )}
           </div>
         ))}

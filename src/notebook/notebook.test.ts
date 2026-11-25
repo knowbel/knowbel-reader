@@ -305,3 +305,18 @@ test('recapturing an AI-answer occurrence reuses its linked note and preserves w
   store.setDiveHighlights(marks=>marks.filter(mark=>mark.id!==id));assert.equal(store.captureDive(mark),id);
   assert.equal(store.plain(store.entryForCapture(`dive:${id}`)),'My explanation');await store.flush();
 });
+
+test('starting a dive from a restored answer highlight links the existing note', async () => {
+  const store = new NotebookStore(createMemoryStorage());
+  await store.load(DOC, {});
+  const mark = { panelId: 'parent', text: 'A repeated phrase', comment: 'My note', turnIndex: 3, occurrence: 1, highlightStyle: 'underline' as const };
+  const id = store.captureDive(mark);
+  store.setDiveHighlights((marks) => marks.filter((item) => item.id !== id));
+
+  assert.equal(store.captureDive({ ...mark, comment: '', divePanelId: 'child' }), id);
+  assert.equal(store.getDiveHighlights().length, 1);
+  assert.deepEqual(store.getDiveHighlights()[0], { ...mark, id, divePanelId: 'child', createdAt: store.getDiveHighlights()[0].createdAt });
+  assert.equal(store.captureDive({ ...mark, divePanelId: 'another-child' }), id);
+  assert.equal(store.getDiveHighlights()[0].divePanelId, 'another-child');
+  assert.equal(store.plain(store.entryForCapture(`dive:${id}`)), 'My note');
+});

@@ -377,8 +377,15 @@ export class NotebookStore {
   captureDive(mark: Omit<DiveHighlight, "id" | "createdAt">): string {
     const existing = this.doc.captures.find((capture) => capture.dive?.panelId === mark.panelId && capture.dive.text === mark.text && capture.dive.turnIndex === mark.turnIndex && (capture.dive.occurrence ?? 0) === (mark.occurrence ?? 0));
     if (existing?.dive) {
-      if (!existing.visible || !this.owners.has(existing.id)) this.setDiveHighlights((previous) => [{ ...existing.dive!, comment: this.plain(this.entryForCapture(existing.id)) }, ...previous]);
-      return existing.dive.id;
+      const saved = existing.dive;
+      const divePanelId = mark.divePanelId ?? saved.divePanelId;
+      if (!existing.visible || !this.owners.has(existing.id)) {
+        const restored = { ...saved, divePanelId, comment: this.plain(this.entryForCapture(existing.id)) };
+        this.setDiveHighlights((previous) => [restored, ...previous.filter((item) => item.id !== saved.id)]);
+      } else if (divePanelId !== saved.divePanelId) {
+        this.setDiveHighlights((previous) => previous.map((item) => item.id === saved.id ? { ...item, divePanelId } : item));
+      }
+      return saved.id;
     }
     const id = crypto.randomUUID(); this.setDiveHighlights((previous) => [{ ...mark, id, createdAt: now() }, ...previous]); return id;
   }

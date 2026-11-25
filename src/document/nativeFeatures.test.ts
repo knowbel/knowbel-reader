@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { htmlAdapter } from "../html/adapter.ts";
 import { DocumentEngine } from "./engine.ts";
-import { anchorText } from "./anchors.ts";
+import { anchorExcerpt, anchorText, textAnchor } from "./anchors.ts";
 import { mediaUrl, playerUrl } from "./media.ts";
 import { nativeDivePanels, nativeSummaryStore } from "./nativeDives.ts";
 import { ancestorChain, rootPanelOf, treeOf } from "../deepdive/tree.ts";
+import { buildDivePrompt, selectionForPrompt } from "../deepdive/prompts.ts";
 import type { FlowDocument, FlowNode, DocumentAnnotation } from "./model.ts";
 import type { AskThread } from "../ask/types.ts";
 import { annotatedHTML } from "./export.ts";
@@ -68,6 +69,36 @@ test("native dive projection preserves conversation identity, summaries, streami
   assert.equal(rootPanelOf(cyclic, "root"), null);
   assert.equal(ancestorChain(cyclic, "root", "Source").length, 3);
   assert.equal(treeOf(cyclic, "root").length, 2);
+});
+test("native dive excerpts preserve source math across blocks without changing saved anchor text", () => {
+  const inline = String.raw`\frac{x_1}{2}`;
+  const display = String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`;
+  const formula = (value: string, mode: "inline" | "block") =>
+    `<math display="${mode}"><semantics><mi>x</mi><annotation encoding="application/x-tex">${value.replaceAll("&", "&amp;")}</annotation></semantics></math>`;
+  const document = parse(`<p>Before ${formula(inline, "inline")} and after.</p>${formula(display, "block")}<p>End of selection.</p>`);
+  const first = document.blocks[0], last = document.blocks.at(-1)!;
+  const anchor = textAnchor(document, { blockId: first.id, offset: "Before ".length }, { blockId: last.id, offset: 3 });
+  const parts = anchorExcerpt(document, anchor);
+  assert.equal(parts.map(({ value }) => value).join(""), anchorText(document, anchor));
+  assert.deepEqual(parts.filter((part) => part.kind === "math"), [
+    { kind: "math", value: inline, display: false },
+    { kind: "math", value: display, display: true },
+  ]);
+  const partial = textAnchor(document, { blockId: first.id, offset: 8 }, { blockId: first.id, offset: 10 });
+  assert.deepEqual(anchorExcerpt(document, partial), [{ kind: "text", value: anchorText(document, partial) }]);
+
+  const root: AskThread = { id: "source", title: "Source", mode: "dive", guided: "guide", anchor, turns: [], createdAt: "", updatedAt: "" };
+  const { panels } = nativeDivePanels([
+    root,
+    { ...root, id: "answer", selection: "An earlier answer with its own selected wording." },
+    { ...root, id: "child", parentThreadId: root.id, selection: anchor.quote },
+  ], new DocumentEngine(document));
+  assert.equal(panels[0].selection, anchor.quote);
+  assert.deepEqual(panels[0].selectionParts, parts);
+  assert.ok(selectionForPrompt(panels[0]).includes(`$${inline}$`));
+  assert.ok(buildDivePrompt(document.title, panels[0], null).system.includes(`$$\n${display}\n$$`));
+  assert.equal(panels[1].selectionParts, undefined);
+  assert.equal(panels[2].selectionParts, undefined);
 });
 test("annotated export includes native math, object marks, embedded SVG, and editable notebook writing safely", async () => {
   const document = parse('<h1>Study &amp; notes</h1><p>Mark this <math><semantics><mi>x</mi><annotation encoding="application/x-tex">x^2</annotation></semantics></math>.</p><svg viewBox="0 0 20 20"><rect width="20" height="20" fill="red"/></svg>');

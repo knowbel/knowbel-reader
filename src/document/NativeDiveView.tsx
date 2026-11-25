@@ -1,24 +1,26 @@
 import { useMemo, useRef, useSyncExternalStore, type RefObject } from "react";
 import DeepDiveView from "../deepdive/DeepDiveView";
-import type { SendOptions } from "../deepdive/DivePanelPane";
+import type { DivePanelPaneProps, SendOptions } from "../deepdive/DivePanelPane";
 import { newThread, type AskContext } from "../ask/job";
 import { useAskThreads, type AskStore } from "../ask/store";
 import type { AskThread } from "../ask/types";
 import type { DocumentEngine } from "./engine";
 import type { NotebookStore } from "../notebook/store";
 import { useDiveMarks } from "../notebook/store";
-import type { DiveHighlight, DiveHighlightPlacement } from "../deepdive/types";
+import type { DiveHighlight, DiveHighlightPlacement, DiveTurnRequest } from "../deepdive/types";
 import type { ResolvedRef } from "../grounding/CitationChip";
 import { addAttachment, makeAttachment, type Attachment } from "../grounding/attachments";
 import { saveNotebookExcerpt } from "../notebook/capture";
 import { streamDiveReply } from "../deepdive/api";
 import { buildTreeSummaryRequest, treeAnswerCount, treeRevision } from "../deepdive/summary";
 import { openingMessage } from "../deepdive/prompts";
+import { createGuidedQuestion, type GuidedQuestionRequest } from "../deepdive/guided";
 import { nativeDivePanels, nativeSummaryStore, sendNativeDive } from "./nativeDives";
 
-export default function NativeDiveView({ store, engine, notebook, getContext, controllers, focusId, onFocus, onReturn, rootSlotRef, onJumpToSource, onJob, highlightFocusId }: {
+export default function NativeDiveView({ store, engine, notebook, getContext, controllers, focusId, turnRequest, onFocus, onReturn, rootSlotRef, onJumpToSource, onJob, highlightFocusId }: {
   store: AskStore; engine: DocumentEngine; notebook: NotebookStore; getContext: () => AskContext; controllers: Map<string, AbortController>;
-  focusId: string; onFocus: (id: string | null) => void; onReturn: (id: string) => void; rootSlotRef: RefObject<HTMLDivElement>;
+  focusId: string; onFocus: (id: string | null) => void; onReturn: DivePanelPaneProps["onReturnToPassage"]; rootSlotRef: RefObject<HTMLDivElement>;
+  turnRequest?: DiveTurnRequest;
   onJumpToSource: (ref: ResolvedRef) => void; onJob: (job: Promise<void>) => void; highlightFocusId: string | null;
 }) {
   const threads = useAskThreads(store);
@@ -33,9 +35,20 @@ export default function NativeDiveView({ store, engine, notebook, getContext, co
   const setAttachments = (id: string, values: Attachment[]) => notebook.drafts!.setAttachments(`dive:${id}`, values);
   const send = async (id: string, question: string, _onChunk?: (chunk: string) => void, options: SendOptions = {}) => {
     const attached = options.attachments ?? attachments[id] ?? [];
-    setAttachments(id, []);
+    if (!options.attachments) setAttachments(id, []);
     const work = sendNativeDive(store, id, question, getContext(), controllers, { ...options, attachments: attached }, _onChunk);
     onJob(work); await work;
+  };
+  const createQuestion = (request: GuidedQuestionRequest) => {
+    const parent = panels.find((panel) => panel.id === request.parentId);
+    if (!parent) return;
+    const draft = createGuidedQuestion(parent, request, (unit) => engine.labelForUnit(unit));
+    store.add({
+      ...newThread(request.question), id: draft.id, mode: "dive", guided: draft.guided, parentThreadId: parent.id,
+      anchor: store.get(parent.id)?.anchor, selection: draft.selection, contextText: draft.contextText, inheritedSources: draft.inheritedSources,
+    });
+    void send(draft.id, request.question, undefined, { attachments: request.attachments, diagram: request.diagram });
+    return draft.id;
   };
   const nested = (parentId: string, selection: string, contextText: string, placement: DiveHighlightPlacement = {}) => {
     const parent = store.get(parentId);
@@ -68,8 +81,8 @@ export default function NativeDiveView({ store, engine, notebook, getContext, co
   };
   return <DeepDiveView panels={panels} jobs={jobs} summaryJobs={summaryJobs} onCancel={(id) => controllers.get(id)?.abort()}
     onCancelSummary={(id) => controllers.get(`summary:${id}`)?.abort()} onReturnToPassage={onReturn} scrollPositions={scrollPositions.current}
-    diveHighlights={highlights} scrolledToDiveHighlightId={highlightFocusId} focusId={focusId} rootLabel={engine.document.title} onFocusChange={onFocus}
-    rootSlotRef={rootSlotRef} onSendMessage={send} onNestedDive={({ parentId, selection, contextText, ...placement }) => { nested(parentId, selection, contextText, placement); }}
+    diveHighlights={highlights} scrolledToDiveHighlightId={highlightFocusId} focusId={focusId} turnRequest={turnRequest} rootLabel={engine.document.title} onFocusChange={onFocus}
+    rootSlotRef={rootSlotRef} onSendMessage={send} onCreateGuidedQuestion={createQuestion} onNestedDive={({ parentId, selection, contextText, ...placement }) => { nested(parentId, selection, contextText, placement); }}
     onSuggestedDive={({ parentId, turnIndex, suggestion }) => { const turn = store.get(parentId)?.turns[turnIndex]; nested(parentId, suggestion.text, turn?.content ?? "", { turnIndex }); }}
     onSummarizeTree={summarize} pageLabel={(unit) => engine.labelForUnit(unit)} onJumpToSource={onJumpToSource} attachments={attachments}
     onAddToQuestion={(id, kind, text) => { const attachment = makeAttachment(kind, text); if (attachment) setAttachments(id, addAttachment(attachments[id] ?? [], attachment)); }}

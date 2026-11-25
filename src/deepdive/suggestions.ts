@@ -21,6 +21,7 @@ const MAX_FROM_CONTEXT = 2;
 
 const LINE = /^\s*[-*•]?\s*(ask|dive|diagram)\s*:\s*(.+?)\s*$/i;
 const CITATION = /\s*\[\s*(?:inferred\s*:?\s*)?(S\d+)(?:\s*,\s*S\d+)*\s*\]\s*$/i;
+const INLINE_MATH = /\$([^$\n]+)\$/g;
 
 // The answer without its <next> block, and the suggestions in it. A block
 // without its closing tag (cut off at the token limit) still counts.
@@ -73,7 +74,10 @@ export function mergeSuggestions(fromModel: DiveSuggestion[], sources: SourceRef
   const seen = new Set<string>();
   const valid = fromModel.filter((suggestion) => {
     const key = suggestion.text.trim().toLowerCase();
-    if (!key || seen.has(key) || suggestion.text.length > 100) return false;
+    // LaTeX commands can make a short visible question long in storage.
+    if (!key || seen.has(key) || suggestion.text.length > 260) return false;
+    const visible = suggestion.text.replace(INLINE_MATH, (_match, tex: string) => tex.replace(/\\[a-z]+/gi, "x").replace(/[{}]/g, ""));
+    if (visible.length > 100) return false;
     if (suggestion.sourceLabel && !sources?.some((source) => source.label === suggestion.sourceLabel)) return false;
     seen.add(key);
     return true;

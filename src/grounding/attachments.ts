@@ -18,7 +18,7 @@ export interface RegionImage {
 
 export interface Attachment {
   id: string;
-  kind: "document" | "answer" | "region";
+  kind: "document" | "answer" | "region" | "context";
   text: string; // region: the PDF text inside it, possibly ""
   pageNumber?: number; // document and region attachments: the page it's on
   truncated?: boolean; // cut to ATTACHMENT_MAX_CHARS
@@ -181,6 +181,10 @@ export function attachmentInstructions(
         .join("\n")}`,
     );
   }
+  const context = attachments.filter((attachment) => attachment.kind === "context");
+  if (context.length) {
+    lines.push(`The reader added this background for the question. Treat it as context, not document evidence:\n${context.map((attachment) => attachment.text).join("\n\n")}`);
+  }
   return lines.join("\n");
 }
 
@@ -193,7 +197,7 @@ export function attachmentQuery(attachments: Attachment[]): string {
 // "p. 42 · Region".
 export function attachmentLabel(attachment: Attachment, pageLabel: (pageNumber: number) => string): string {
   if (attachment.kind === "region") return attachment.locationLabel ? `${attachment.locationLabel} · Image` : `p. ${pageLabel(attachment.pageNumber ?? 0)} · Region`;
-  const where = attachment.locationLabel || (attachment.kind === "document" && attachment.pageNumber !== undefined ? `p. ${pageLabel(attachment.pageNumber)}` : "From answer");
+  const where = attachment.locationLabel || (attachment.kind === "document" && attachment.pageNumber !== undefined ? `p. ${pageLabel(attachment.pageNumber)}` : attachment.kind === "context" ? "Your context" : "From answer");
   const snippet = attachment.text.length > 48 ? `${attachment.text.slice(0, 47)}…` : attachment.text;
   return `${where} · “${snippet}”`;
 }

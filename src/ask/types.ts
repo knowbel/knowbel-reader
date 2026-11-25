@@ -2,13 +2,14 @@ import type { AskBasis, AskScope } from "../grounding/ask";
 import type { Attachment } from "../grounding/attachments";
 import type { SourceRef } from "../grounding/types";
 import type { FlowAnchor } from "../document/model";
-import type { DiveTreeSummary, DiveHighlightPlacement, DiveImage } from "../deepdive/types";
+import type { DiveTreeSummary, DiveHighlightPlacement, DiveImage, DivePanel } from "../deepdive/types";
 import type { DiveSuggestion } from "../deepdive/suggestions";
 
 export interface AskTurn {
   id?: string;
   role: "user" | "assistant";
   content: string;
+  shortAnswerEnd?: number;
   at: string; // ISO timestamp
   // Assistant turns: the passages the answer was given (its [S1]-style
   // markers refer to these), and what they were — for "Based on…".
@@ -22,6 +23,7 @@ export interface AskTurn {
   attachments?: Attachment[];
   suggestions?: DiveSuggestion[];
   diagram?: boolean;
+  simplify?: boolean;
 }
 
 // One line of questioning about a document. Kept per document in its own
@@ -37,6 +39,7 @@ export interface AskThread {
   createdAt: string;
   updatedAt: string;
   mode?: "dive";
+  guided?: DivePanel["guided"];
   anchor?: FlowAnchor;
   parentThreadId?: string;
   selection?: string;

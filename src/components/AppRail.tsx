@@ -177,7 +177,7 @@ export default function AppRail({
 
       <div className="app-rail-spacer" />
 
-      {DEV_MODE && !reflowable ? <ExperimentsMenu /> : null}
+      {DEV_MODE ? <ExperimentsMenu /> : null}
       <ViewMenu view={view} />
     </nav>
   );
@@ -446,7 +446,7 @@ function ExperimentsMenu() {
       {popover.open ? (
         <div className="rail-popover rail-popover--bottom view-menu experiments-menu" role="dialog" aria-label="Deep Dive experiments">
           <div className="rail-popover-title">Deep Dive experiments</div>
-          <p className="experiments-menu-note">Off by default. Each one works on its own; they apply to the next dive message.</p>
+          <p className="experiments-menu-note">Guided Deep Dive applies when you start a new dive from a selection.</p>
           {EXPERIMENT_GROUPS.map((group) => (
             <div key={group.title} className="experiments-menu-group">
               <div className="experiments-menu-group-title">{group.title}</div>

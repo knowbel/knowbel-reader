@@ -52,13 +52,19 @@ export interface SendOptions {
   retry?: boolean;
   generalAllowed?: boolean;
   wider?: boolean;
+  simplify?: boolean;
 }
 
 export interface DivePanelPaneProps {
+  guidedAnswer?: {
+    turnIndex: number;
+    footer: ReactNode;
+    onAttach: () => void;
+  };
   panel: DivePanel;
   job?: DiveJobState;
   onCancel: (panelId: string) => void;
-  onReturnToPassage: (rootId: string) => void;
+  onReturnToPassage: (rootId: string, options?: { keepQuestionOpen?: boolean }) => void;
   scrollPositions: Map<string, number>;
   allPanels: DivePanel[];
   diveHighlights: DiveHighlight[];
@@ -150,7 +156,7 @@ interface AnnotationHandlers {
   highlightsById: Map<string, DiveHighlight>;
   scrolledToDiveHighlightId: string | null;
   editingHighlightId: string | null;
-  onMarkerClick: (panelId: string, anchorRect: DOMRect) => void;
+  onMarkerClick?: (panelId: string, anchorRect: DOMRect) => void;
   onHighlightClick: (highlight: DiveHighlight, anchorRect: DOMRect) => void;
   // For citation chips: each turn's sources (the streaming reply's too).
   sourcesForTurn: (turnIndex: number) => SourceRef[] | undefined;
@@ -187,8 +193,8 @@ function useAnnotationComponents(handlersRef: RefObject<AnnotationHandlers>): Co
             );
           }
         }
-        if (kind === "marker") {
-          return <DiveMarkerSpan onActivate={(anchorRect) => handlers.onMarkerClick(id, anchorRect)}>{children}</DiveMarkerSpan>;
+        if (kind === "marker" && handlers.onMarkerClick) {
+          return <DiveMarkerSpan onActivate={(anchorRect) => handlers.onMarkerClick?.(id, anchorRect)}>{children}</DiveMarkerSpan>;
         }
         return <mark>{children}</mark>;
       },
@@ -289,6 +295,38 @@ function renderedMarkdown(
 
 // An answer's diagram, drawn apart from its text (diagram.ts).
 const diagramOf = splitDiagram;
+
+function highlightTargets(highlights: DiveHighlight[]): AnnotationTarget[] {
+  return highlights.map(({ id, text, turnIndex, occurrence }) => ({
+    kind: "highlight", id, text, turnIndex, occurrence,
+  }));
+}
+
+// Render the same answer and linked marks in the question list and thread.
+// Leave the stable turn ID to the focused pane so Notebook links scroll there.
+export function InlineDiveAnswer({ content, sources, turnIndex, highlights, onOpenDive, pageLabel, onJumpToSource }: {
+  content: string;
+  sources?: SourceRef[];
+  turnIndex: number;
+  highlights: DiveHighlight[];
+  onOpenDive: (id: string) => void;
+} & Pick<DivePanelPaneProps, "pageLabel" | "onJumpToSource">) {
+  const handlers = useRef<AnnotationHandlers | null>(null);
+  handlers.current = {
+    highlightsById: new Map(highlights.map((mark) => [mark.id, mark])),
+    scrolledToDiveHighlightId: null,
+    editingHighlightId: null,
+    onHighlightClick: (mark) => onOpenDive(mark.divePanelId ?? mark.panelId),
+    sourcesForTurn: () => sources,
+    pageLabel,
+    onJumpToSource,
+  };
+  const components = useAnnotationComponents(handlers);
+  return <div className="dive-turn">
+    <TurnMarkdown content={content} turnIndex={turnIndex} components={components} sources={sources}
+      pageLabel={pageLabel} annotate={{ targets: highlightTargets(highlights), claims: new Map(), strictOccurrence: true }} />
+  </div>;
+}
 
 // A grounded answer, not an error notice: gets a badge and a sources line.
 function isGroundedAnswer(turn: DivePanel["turns"][number]): turn is DivePanel["turns"][number] & { sources: SourceRef[] } {
@@ -436,6 +474,7 @@ function ThinkingIndicator() {
 }
 
 export default function DivePanelPane({
+  guidedAnswer,
   panel,
   job,
   onCancel,
@@ -562,13 +601,7 @@ export default function DivePanelPane({
   const annotationTargets = useMemo<AnnotationTarget[]>(() => {
     const divedFromHighlight = new Set(panelHighlights.map((highlight) => highlight.divePanelId));
     return [
-      ...panelHighlights.map((highlight) => ({
-        kind: "highlight" as const,
-        id: highlight.id,
-        text: highlight.text,
-        turnIndex: highlight.turnIndex,
-        occurrence: highlight.occurrence,
-      })),
+      ...highlightTargets(panelHighlights),
       ...children
         .filter((child) => child.selection && !divedFromHighlight.has(child.id))
         .map((child) => ({ kind: "marker" as const, id: child.id, text: child.selection })),
@@ -610,6 +643,7 @@ export default function DivePanelPane({
   const awaitingReply = pending;
 
   const root = experiments.rootAnchor && panel.parentId ? rootPanelOf(allPanels, panel.id) : null;
+  const guidedDiagram = guidedAnswer ? diagramOf(panel.turns[guidedAnswer.turnIndex]?.content ?? "").code : null;
   const askedLater = (turnIndex: number, text: string) =>
     panel.turns.slice(turnIndex + 1).some((turn) => turn.role === "user" && turn.content.trim().toLowerCase() === text.trim().toLowerCase());
   const explored = (turnIndex: number) => (suggestion: DiveSuggestion) =>
@@ -626,17 +660,18 @@ export default function DivePanelPane({
 
   return (
     <div className="dive-panel-pane">
-      <header className="dive-panel-header">{panel.label}</header>
+      {!guidedAnswer ? <header className="dive-panel-header">{panel.label}</header> : null}
       <div className="dive-panel-dialogue" ref={dialogueRef}>
-        {root && root.id !== panel.id ? (
+        {!guidedAnswer && root && root.id !== panel.id ? (
           <RootAnchorCard root={root} pageLabel={pageLabel} onOpen={() => onReturnToPassage(root.id)} />
         ) : null}
         {panel.turns.map((turn, index) =>
+          guidedAnswer && index !== guidedAnswer.turnIndex ? null :
           isOpeningTurn(panel, index) ? (
             <SourceExcerpt key={index} panel={panel} annotate={annotate} components={markdownComponents} />
           ) : (
             <div key={turn.id ?? index} data-turn-id={turn.id} className={`dive-turn dive-turn-${turn.role}`}>
-              {turn.role === "assistant" && diagramOf(turn.content).code ? (
+              {!guidedAnswer && turn.role === "assistant" && diagramOf(turn.content).code ? (
                 <MermaidDiagram code={diagramOf(turn.content).code!} />
               ) : null}
               <TurnMarkdown
@@ -654,10 +689,11 @@ export default function DivePanelPane({
                 sources={turn.role === "assistant" ? turn.sources : undefined}
                 pageLabel={pageLabel}
               />
+              {guidedDiagram ? <MermaidDiagram code={guidedDiagram} /> : null}
               {isGroundedAnswer(turn) ? (
                 <AnswerBadge grounding={answerGrounding(parseAnswer(turn.content, turn.sources))} />
               ) : null}
-              {turn.role === "assistant" && (turn.status === "error" || turn.status === "cancelled" || turn.content.startsWith("⚠️")) && index === panel.turns.length - 1 ? (
+              {!guidedAnswer && turn.role === "assistant" && (turn.status === "error" || turn.status === "cancelled" || turn.content.startsWith("⚠️")) && index === panel.turns.length - 1 ? (
                 <div><button type="button" className="answer-more" disabled={awaitingReply} onClick={() => {
                   const question = panel.turns[index - 1];
                   if (question?.role === "user") void onSendMessage(panel.id, question.content, undefined, { retry: true, attachments: question.attachments, diagram: question.diagram });
@@ -690,7 +726,7 @@ export default function DivePanelPane({
                     pageLabel={pageLabel}
                     onJump={onJumpToSource}
                   />
-                  {index === panel.turns.length - 1 && !awaitingReply ? (
+                  {!guidedAnswer && index === panel.turns.length - 1 && !awaitingReply ? (
                     <button
                       type="button"
                       className="answer-more"
@@ -699,14 +735,14 @@ export default function DivePanelPane({
                       More detail
                     </button>
                   ) : null}
-                  {experiments.diagrams && index === panel.turns.length - 1 && !awaitingReply && !diagramOf(turn.content).code ? (
+                  {!guidedAnswer && experiments.diagrams && index === panel.turns.length - 1 && !awaitingReply && !diagramOf(turn.content).code ? (
                     <button type="button" className="answer-more" onClick={() => void send(DIAGRAM_MESSAGE, { diagram: true })}>
                       Diagram
                     </button>
                   ) : null}
                 </div>
               ) : null}
-              {experiments.suggestions && turn.role === "assistant" && turn.suggestions?.length ? (
+              {!guidedAnswer && experiments.suggestions && turn.role === "assistant" && turn.suggestions?.length ? (
                 <SuggestionPills
                   suggestions={experiments.diagrams ? turn.suggestions : turn.suggestions.filter((s) => s.kind !== "diagram")}
                   explored={explored(index)}
@@ -740,6 +776,7 @@ export default function DivePanelPane({
             <button type="button" className="answer-more" onClick={() => onCancel(panel.id)}>Stop</button>
           </div>
         ) : null}
+        {guidedAnswer?.footer}
       </div>
       {captured ? (
         <DiveSelectionTip
@@ -773,7 +810,8 @@ export default function DivePanelPane({
               onAddToQuestion("answer", captured.text);
             }
             clear();
-            composerRef.current?.focus();
+            if (guidedAnswer) guidedAnswer.onAttach();
+            else composerRef.current?.focus();
           }}
           onClose={clear}
         />
@@ -809,7 +847,7 @@ export default function DivePanelPane({
           onClose={() => setEditingHighlight(null)}
         />
       ) : null}
-      <QuestionComposer
+      {!guidedAnswer ? <QuestionComposer
         className="dive-panel-composer"
         value={draft}
         onChange={setDraft}
@@ -826,7 +864,7 @@ export default function DivePanelPane({
         pageLabel={pageLabel}
         onRemoveAttachment={onRemoveAttachment}
         textareaRef={composerRef}
-      />
+      /> : null}
     </div>
   );
 }

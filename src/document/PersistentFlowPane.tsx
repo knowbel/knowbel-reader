@@ -3,7 +3,13 @@ import { createPortal } from "react-dom";
 
 // Keep the source DOM and its scroll position alive when the shared dive
 // view moves between source/answer and parent/child answer panes.
-export default function PersistentFlowPane({ children, workspace, dive, focused }: { children: ReactNode; workspace: RefObject<HTMLDivElement>; dive: RefObject<HTMLDivElement>; focused: string | null }) {
+export default function PersistentFlowPane({ children, workspace, dive, focused, guidedQuestions }: {
+  children: ReactNode;
+  workspace: RefObject<HTMLDivElement>;
+  dive: RefObject<HTMLDivElement>;
+  focused: string | null;
+  guidedQuestions: boolean;
+}) {
   const host = useRef<HTMLDivElement | null>(null);
   if (!host.current) { host.current = document.createElement("div"); host.current.className = "persistent-flow-pane"; }
   const offscreen = useRef<HTMLDivElement>(null);
@@ -24,7 +30,7 @@ export default function PersistentFlowPane({ children, workspace, dive, focused 
       if (sourceWorkspace) observer.observe(sourceWorkspace, { childList: true, subtree: true });
       return () => observer.disconnect();
     }
-  }, [focused, workspace, dive]);
+  }, [focused, guidedQuestions, workspace, dive]);
   useLayoutEffect(() => () => host.current?.remove(), []);
   return <><div ref={offscreen} hidden />{createPortal(children, host.current)}</>;
 }

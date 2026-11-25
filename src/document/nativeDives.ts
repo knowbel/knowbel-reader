@@ -4,7 +4,7 @@ import type { AskStore } from "../ask/store.ts";
 import type { AskThread } from "../ask/types.ts";
 import type { DiveJobState, DivePanel, SummaryJobState } from "../deepdive/types.ts";
 import type { DocumentEngine } from "./engine.ts";
-import { anchorText } from "./anchors.ts";
+import { anchorExcerpt, anchorText } from "./anchors.ts";
 
 type SummaryJobs = Record<string, SummaryJobState>;
 function summaryStore() {
@@ -31,14 +31,23 @@ export function nativeDivePanels(threads: AskThread[], engine: DocumentEngine): 
   const jobs: Record<string, DiveJobState> = {};
   const dives = threads.filter((thread) => thread.mode === "dive");
   const ids = new Set(dives.map((thread) => thread.id));
-  const panels = dives.map((thread): DivePanel => {
+  // AskStore prepends new threads. Guided questions read in the order the
+  // reader submitted them, including questions from the same batch.
+  const ordered = [...dives.filter((thread) => thread.guided !== "question"), ...dives.filter((thread) => thread.guided === "question").reverse()];
+  const panels = ordered.map((thread): DivePanel => {
     const streaming = thread.turns.find((turn) => turn.status === "streaming");
-    if (streaming) jobs[thread.id] = { phase: "streaming", text: streaming.content, sources: streaming.sources };
+    if (streaming) jobs[thread.id] = { phase: "streaming", text: streaming.content, sources: streaming.sources, shortAnswerEnd: streaming.shortAnswerEnd };
+    const selection = thread.selection ?? (thread.anchor ? anchorText(engine.document, thread.anchor) : thread.title);
+    const excerpt = thread.anchor && !thread.parentThreadId ? anchorExcerpt(engine.document, thread.anchor) : [];
+    // Roots can also come from an Ask answer with a nearby source anchor.
+    // Use the source's math only when its text matches the quoted selection.
+    const selectionParts = excerpt.some((part) => part.kind === "math") &&
+      excerpt.map((part) => part.value).join("").trim() === selection.trim() ? excerpt : undefined;
     return { id: thread.id, parentId: thread.parentThreadId && ids.has(thread.parentThreadId) && thread.parentThreadId !== thread.id ? thread.parentThreadId : null, anchorHighlightId: null,
-      selection: thread.selection ?? (thread.anchor ? anchorText(engine.document, thread.anchor) : thread.title),
+      guided: thread.guided, selection, selectionParts,
       selectionImage: thread.selectionImage, label: thread.title.slice(0, 60), contextText: thread.contextText ?? "",
       ...(thread.anchor ? { pageNumber: engine.unitForAnchor(thread.anchor), locationLabel: engine.labelForUnit(engine.unitForAnchor(thread.anchor)) } : {}),
-      turns: thread.turns.filter((turn) => turn.status !== "streaming").map((turn) => ({ id: turn.id, role: turn.role, content: turn.content, at: turn.at, sources: turn.sources, attachments: turn.attachments, suggestions: turn.suggestions, diagram: turn.diagram, ...(turn.status === "error" ? { status: "error" as const, error: turn.content } : {}) })),
+      turns: thread.turns.filter((turn) => turn.status !== "streaming").map((turn) => ({ id: turn.id, role: turn.role, content: turn.content, shortAnswerEnd: turn.shortAnswerEnd, at: turn.at, sources: turn.sources, attachments: turn.attachments, suggestions: turn.suggestions, diagram: turn.diagram, simplify: turn.simplify, ...(turn.status === "error" ? { status: "error" as const, error: turn.content } : {}) })),
       createdAt: thread.createdAt, summary: thread.summary, baseSources: thread.baseSources, sourceRegistry: thread.sourceRegistry, inheritedSources: thread.inheritedSources,
     };
   });
