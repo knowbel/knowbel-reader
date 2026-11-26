@@ -70,9 +70,11 @@ export default function NativeDiveView({ store, engine, notebook, getContext, co
       let text = "";
       try {
         const context = getContext();
-        const content = await streamDiveReply({ system: request.system, messages: [{ role: "user", content: request.prompt }], signal: context.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal,
+        const signal = context.signal ? AbortSignal.any([context.signal, controller.signal]) : controller.signal;
+        const content = await streamDiveReply({ system: request.system, messages: [{ role: "user", content: request.prompt }], signal,
           onText: (chunk) => { text += chunk; setSummaryJobs((jobs) => ({ ...jobs, [rootId]: { phase: "streaming", text, sources: request.sources } })); } });
-        if (controller.signal.aborted) return;
+        signal.throwIfAborted();
+        if (!content.trim()) throw new Error("The model returned an empty summary. Try again.");
         store.update(rootId, (thread) => ({ ...thread, summary: { content, sources: request.sources, at: new Date().toISOString(), turnCount: treeAnswerCount(panels, rootId), revision: treeRevision(panels, rootId) } }));
         setSummaryJobs((jobs) => { const next = { ...jobs }; delete next[rootId]; return next; });
       } catch (error) { setSummaryJobs((jobs) => ({ ...jobs, [rootId]: { phase: controller.signal.aborted ? "cancelled" : "error", text, sources: request.sources, error: controller.signal.aborted ? "Summary stopped." : String(error) } })); }

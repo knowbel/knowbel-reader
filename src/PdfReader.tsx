@@ -29,6 +29,7 @@ import { useTheme } from "./theme";
 import Sidebar, { type SidebarPanel } from "./components/Sidebar";
 import AppRail, { type HighlightPen, type Tool } from "./components/AppRail";
 import type { SearchMatch } from "./components/SearchPanel";
+import type { HighlightPreviewRenderer } from "./components/HighlightContainer";
 import { HIGHLIGHT_COLOR_PRESETS } from "./highlightColors";
 import type { CommentedHighlight } from "./types";
 import "./App.css";
@@ -62,7 +63,7 @@ import { cropTarget } from "./xref/preview";
 import { DocDataWriter } from "./storage/docDataWriter";
 import { buildDivePrompt, openingMessage } from "./deepdive/prompts";
 import { getExperiments, useExperiments } from "./deepdive/experiments";
-import { createGuidedQuestion, DISCOVER_QUESTIONS, forDiveRequest, guidedReply, guidedRoot, streamingGuidedAnswer, type GuidedQuestionRequest } from "./deepdive/guided";
+import { createGuidedQuestion, DISCOVER_QUESTIONS, forDiveRequest, guideDiscovery, guidedReply, guidedRoot, streamingGuidedAnswer, type GuidedQuestionRequest } from "./deepdive/guided";
 import { divePromptOptions, prepareDiveSources, type DiveRequestContext } from "./deepdive/diveRequest";
 import { labelWithRegistry } from "./deepdive/sourceRegistry";
 import { abortable } from "./deepdive/job";
@@ -83,6 +84,7 @@ import {
 import { getTextIndex, setActiveDocument } from "./text/documentText";
 import { matchPosition } from "./glossary/textIndex";
 import { citedSources, markersToPages } from "./grounding/citations";
+import AnswerMarkdown from "./grounding/AnswerMarkdown";
 import type { ResolvedRef } from "./grounding/CitationChip";
 import type { SourceRef } from "./grounding/types";
 import {
@@ -108,7 +110,7 @@ import { useReaderPersistence } from "./notebook/useReaderPersistence";
 import { NotebookProvider } from "./notebook/context";
 import { saveGlossaryDefinition } from "./notebook/glossaryCapture";
 import { saveNotebookExcerpt } from "./notebook/capture";
-import { captureEntryId } from "./notebook/model";
+import { captureEntryId, richText } from "./notebook/model";
 import type { NotebookCapture } from "./notebook/model";
 function useNotebookOutline(pdf: PDFDocumentProxy | null) {
   const [sections, setSections] = useState<{ id: string; title: string; position: number }[]>([]);
@@ -1009,6 +1011,19 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     }, delay);
   };
 
+  const jumpToSourceRef = useRef(jumpToSource);
+  jumpToSourceRef.current = jumpToSource;
+  const renderHighlightHoverPreview: HighlightPreviewRenderer = ({ id, divePanelId }) => {
+    const dive = divePanelId ? panelById(panelsRef.current, divePanelId) : null;
+    if (dive?.guided === "guide") {
+      const { orientation, reply } = guideDiscovery(dive);
+      if (orientation) return <AnswerMarkdown content={orientation} sources={reply?.sources ?? []}
+        pageLabel={pageLabelFor} onJump={(ref) => void jumpToSourceRef.current(ref)} />;
+    }
+    const entry = notebook.entryForCapture(`pdf:${id}`);
+    return entry ? richText(entry.body, { omitDiveSummaries: true }).trim() : null;
+  };
+
   const handleDeleteGlossaryEntry = (entryId: string) => {
     cancelGlossaryJob(entryId);
     glossaryStore.remove(entryId);
@@ -1812,6 +1827,7 @@ export default function PdfReader({ initialDocument, onHome, onOpenDocument }: {
     onFreetextClick: handleFreetextClick,
     addHighlight,
     onOpenNote: (id: string) => notebook.reveal(captureEntryId(`pdf:${id}`)),
+    renderHighlightHoverPreview,
     editHighlight,
     deleteHighlight,
     utilsRef: (utils: PdfHighlighterUtils) => {

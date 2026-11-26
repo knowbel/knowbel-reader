@@ -1,6 +1,6 @@
 import { useNotebook } from "../notebook/context";
-import { saveNotebookExcerpt } from "../notebook/capture";
-import { useEffect, useRef, useState } from "react";
+import { saveDiveSummary } from "../notebook/capture";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import AnswerMarkdown from "../grounding/AnswerMarkdown";
 import type { ResolvedRef } from "../grounding/CitationChip";
@@ -33,6 +33,9 @@ export default function TreeSummaryPanel({
   const notebook = useNotebook();
   const [copied, setCopied] = useState(false);
   const started = useRef(false);
+  const closeButton = useRef<HTMLButtonElement>(null);
+
+  useLayoutEffect(() => { closeButton.current?.focus({ preventScroll: true }); }, []);
 
   const generate = async () => {
     await onSummarize(root.id);
@@ -49,6 +52,7 @@ export default function TreeSummaryPanel({
   const summary = root.summary;
   const stale = summary ? !summary.revision || summary.revision !== treeRevision(panels, root.id) : false;
   const busy = job?.phase === "streaming";
+  const location = root.locationLabel || (root.pageNumber !== undefined ? `p. ${pageLabel(root.pageNumber)}` : "");
 
   const copy = async () => {
     if (!summary) return;
@@ -62,27 +66,22 @@ export default function TreeSummaryPanel({
   };
 
   return (
-    <div className="tree-summary" role="dialog" aria-label="Dive summary">
+    <div className="tree-summary" role="dialog" aria-label="Dive summary" onKeyDown={(event) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      onClose();
+    }}>
       <header className="tree-summary-header">
         <div className="tree-summary-title">
-          <span className="tree-summary-kicker">Summary{root.locationLabel ? ` · ${root.locationLabel}` : root.pageNumber !== undefined ? ` · p. ${pageLabel(root.pageNumber)}` : ""}</span>
+          <div className="tree-summary-title-row">
+            <h2 className="tree-summary-heading">Dive summary</h2>
+            {location ? <span className="tree-summary-location">{location}</span> : null}
+          </div>
           <span className="tree-summary-passage">{root.label || "Selected region"}</span>
         </div>
-        <div className="tree-summary-actions">
-          {summary && !busy && notebook ? <button type="button" className="answer-more" onClick={() => void saveNotebookExcerpt(notebook.store, summary.content, { context: `Dive summary · ${root.label}`, sources: summary.sources, conversationId: root.id, position: root.pageNumber })}>Add to notebook</button> : null}
-          {summary && !busy ? (
-            <button type="button" className="answer-more" onClick={() => void copy()}>
-              {copied ? "Copied" : "Copy as Markdown"}
-            </button>
-          ) : null}
-          <button type="button" className="answer-more" onClick={() => void generate()} disabled={busy}>
-            {busy ? "Summarizing…" : summary ? "Update" : "Summarize"}
-          </button>
-          {busy ? <button type="button" className="answer-more" onClick={onCancel}>Stop</button> : null}
-          <button type="button" className="tree-summary-close" onClick={onClose} aria-label="Close summary" title="Close">
-            <X width={16} height={16} />
-          </button>
-        </div>
+        <button type="button" ref={closeButton} className="tree-summary-close" onClick={onClose} aria-label="Close summary" title="Close summary">
+          <X width={16} height={16} aria-hidden />
+        </button>
       </header>
       {!busy && summary && stale ? (
         <p className="tree-summary-stale">
@@ -90,7 +89,7 @@ export default function TreeSummaryPanel({
         </p>
       ) : null}
       {summary ? <p className="tree-summary-stale">Created {new Date(summary.at).toLocaleString()}</p> : null}
-      {job?.error ? <p className="tree-summary-error">{job.error}</p> : null}
+      {job?.error ? <p className="tree-summary-error" role="status">{job.error}</p> : null}
       <div className="tree-summary-body">
         {busy ? (
           job.text ? (
@@ -102,6 +101,17 @@ export default function TreeSummaryPanel({
           <AnswerMarkdown content={summary.content} sources={summary.sources} pageLabel={pageLabel} onJump={onJumpToSource} />
         ) : null}
       </div>
+      <footer className="tree-summary-actions">
+        {busy ? (
+          <><span className="tree-summary-progress" role="status">Summarizing…</span><button type="button" className="answer-more" onClick={onCancel}>Stop</button></>
+        ) : (
+          <>
+            <button type="button" className="answer-more" onClick={() => void generate()}>{summary ? "Update" : "Summarize"}</button>
+            {summary ? <button type="button" className="answer-more" onClick={() => void copy()}>{copied ? "Copied" : "Copy as Markdown"}</button> : null}
+            {summary && notebook ? <button type="button" className="tree-summary-save" onClick={() => void saveDiveSummary(notebook.store, root, summary)}>Add to notebook</button> : null}
+          </>
+        )}
+      </footer>
     </div>
   );
 }

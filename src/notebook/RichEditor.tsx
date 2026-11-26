@@ -14,7 +14,7 @@ import CitationChip, { type ResolvedRef } from "../grounding/CitationChip";
 import AnswerMarkdown from "../grounding/AnswerMarkdown";
 import { safeDocumentUrl } from "../document/model";
 import { showNotice } from "../components/notices";
-import { fingerprint, newExchange, type RichNode } from "./model";
+import { fingerprint, newExchange, type NotebookEntry, type RichNode } from "./model";
 import { useNotebook, type NotebookBindings } from "./context";
 import { runInlineQuestion, writingProposal } from "./ai";
 import { parseRichMarkdown } from "./codec";
@@ -60,14 +60,19 @@ const NotebookImage = Image.extend({
   },
 }).extend<{ store: NotebookBindings["store"]; allowBase64: boolean; inline: boolean; resize: false; HTMLAttributes: Record<string, unknown> }>({});
 
-function ContributionView({ node }: NodeViewProps) {
+function ContributionOrigin({ origin, edited }: { origin?: NotebookEntry["origin"]; edited: boolean }) {
   const bindings = useNotebook();
-  const origin = node.attrs.origin;
-  const edited = node.attrs.originalHash !== fingerprint(node.toJSON().content ?? []);
-  return <NodeViewWrapper className="nb-contribution"><div className="nb-contribution-origin" contentEditable={false}>
-    <Sparkles size={11} /><span title={origin?.context}>AI-assisted{edited ? " · edited" : ""}</span>
-    {origin?.conversationId && bindings?.onOpenConversation ? <button type="button" onClick={() => { if (!bindings.onOpenConversation!(origin.conversationId, origin.turnId)) showNotice("The conversation is no longer available. The saved sources are kept here."); }}>Original answer</button> : null}
-  </div><NodeViewContent /></NodeViewWrapper>;
+  const summary = origin?.material === "diveSummary";
+  return <div className="nb-contribution-origin" contentEditable={false}>
+    <Sparkles size={11} /><span title={origin?.context}>{summary ? "Dive summary" : "AI-assisted"}{edited ? " · edited" : ""}</span>
+    {origin?.conversationId && bindings?.onOpenConversation ? <button type="button" onClick={() => { if (!bindings.onOpenConversation!(origin.conversationId!, origin.turnId)) showNotice("The conversation is no longer available. The saved sources are kept here."); }}>{summary ? "Open dive" : "Original answer"}</button> : null}
+  </div>;
+}
+function ContributionView({ node }: NodeViewProps) {
+  return <NodeViewWrapper className="nb-contribution">
+    <ContributionOrigin origin={node.attrs.origin} edited={node.attrs.originalHash !== fingerprint(node.toJSON().content ?? [])} />
+    <NodeViewContent />
+  </NodeViewWrapper>;
 }
 const Contribution = TiptapNode.create({
   name: "contribution", group: "block", content: "block+", defining: true,
@@ -160,7 +165,7 @@ export const RichContent = memo(function RichContent({ node, entryId }: { node: 
   const children = node.content?.map((child, i) => <RichContent key={child.attrs?.id ?? i} node={child} entryId={entryId} />);
   switch (node.type) {
     case "doc": return <>{children}</>;
-    case "contribution": return <div className="nb-contribution"><div className="nb-contribution-origin"><Sparkles size={11} /><span title={node.attrs?.origin?.context}>AI-assisted{node.attrs?.originalHash !== fingerprint(node.content ?? []) ? " · edited" : ""}</span>{node.attrs?.origin?.conversationId ? <button type="button" onClick={() => { if (!bindings?.onOpenConversation?.(node.attrs!.origin.conversationId, node.attrs!.origin.turnId)) showNotice("The original conversation is no longer available. Your saved excerpt is kept here."); }}>Original answer</button> : null}</div>{children}</div>;
+    case "contribution": return <div className="nb-contribution"><ContributionOrigin origin={node.attrs?.origin} edited={node.attrs?.originalHash !== fingerprint(node.content ?? [])} />{children}</div>;
     case "paragraph": return <p>{children?.length ? children : <br />}</p>;
     case "heading": { const Tag = `h${Math.max(1, Math.min(6, node.attrs?.level ?? 2))}` as "h2"; return <Tag>{children}</Tag>; }
     case "bulletList": return <ul>{children}</ul>;

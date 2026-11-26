@@ -6,7 +6,7 @@ import type { DocumentAnnotation } from "../document/model.ts";
 import type { DiveHighlight } from "../deepdive/types.ts";
 import { ReaderDraftStore } from "./drafts.ts";
 import {
-  aiContribution, hasRichContent, assetFromDataUrl, captureEntryId, dataUrl, emptyBody, findRichNode, interruptExchanges,
+  aiContribution, hasRichContent, assetFromDataUrl, captureEntryId, dataUrl, emptyBody, findRichNode, fingerprint, interruptExchanges,
   isNotebook, mergeNotebookAssets, mergeNotebooks, migrateNotebook, newNotebook, patchRichNode, removeRichNode, richText, textBody,
   type NotebookAsset, type NotebookCapture, type NotebookDocument, type NotebookEntry,
   type NotebookLegacy, type NotebookSection, type RichNode,
@@ -254,6 +254,42 @@ export class NotebookStore {
     this.journal.set(entry.id, entry);
     this.commit({ ...this.doc, entries: [...this.doc.entries, entry], captures: [...this.doc.captures, capture] }, false, true);
     return entry.id;
+  }
+  addDiveSummary(captureId: string, text: string, body: RichNode, origin: NonNullable<NotebookEntry["origin"]>) {
+    const entry = this.entryForCapture(captureId);
+    if (!entry) return;
+
+    const contribution = aiContribution(body, { ...origin, material: "diveSummary" });
+    const existing = entry.body.content ?? [];
+    if (existing.some((node) => node.type === "contribution" && node.attrs?.origin?.material === "diveSummary" &&
+      node.attrs.origin.conversationId === origin.conversationId && node.attrs.originalHash === contribution.attrs?.originalHash)) {
+      return { id: entry.id, added: false };
+    }
+
+    // The old save action made a separate AI excerpt. Re-saving that same
+    // summary moves its body, including any reader edits, into the passage note.
+    const isLegacySummary = (node: RichNode) => node.type === "contribution" && node.attrs?.origin?.conversationId === origin.conversationId &&
+      node.attrs?.origin?.context?.startsWith("Dive summary · ");
+    const legacy = this.doc.entries.find((candidate) => {
+      if (candidate.deletedAt || candidate.id === entry.id || candidate.captureIds.length !== 1 ||
+        candidate.origin?.conversationId !== origin.conversationId || !candidate.body.content?.some(isLegacySummary)) return false;
+      const capture = this.captures.get(candidate.captureIds[0]);
+      return capture?.kind === "excerpt" && candidate.id === captureEntryId(capture.id) && capture.text === text &&
+        capture.conversationId === origin.conversationId && capture.context?.startsWith("Dive summary · ") &&
+        fingerprint(capture.sources ?? []) === fingerprint(origin.sources);
+    });
+
+    const last = existing.at(-1);
+    const writing = last?.type === "paragraph" && !last.content?.length ? existing.slice(0, -1) : existing;
+    const summary = legacy?.body.content?.map((node) => isLegacySummary(node) ? { ...node, attrs: { ...node.attrs, ...contribution.attrs } } : node)
+      ?? [contribution, { type: "paragraph" }];
+    const at = now();
+    const updated = { ...entry, body: { ...entry.body, content: [...writing, ...summary] }, updatedAt: at };
+    const removed = legacy ? { ...legacy, deletedAt: at, updatedAt: at } : undefined;
+    this.journal.set(entry.id, updated);
+    if (removed) this.journal.set(removed.id, removed);
+    this.commit({ ...this.doc, entries: this.doc.entries.map((item) => item.id === entry.id ? updated : item.id === removed?.id ? removed : item) }, false, true);
+    return { id: entry.id, added: true };
   }
   setSections(sections: NotebookSection[]) {
     const next = [...this.doc.sections.filter((section) => section.custom || section.id === "document"), ...sections.filter((section) => section.id !== "document")];

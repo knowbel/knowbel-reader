@@ -1,4 +1,4 @@
-import { useState, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { FileText } from "lucide-react";
 import type { DiveHighlight, DiveHighlightPlacement, DivePanel, DiveJobState, DiveTurnRequest, SummaryJobState } from "./types";
 import type { Attachment } from "../grounding/attachments";
@@ -86,6 +86,7 @@ export default function DeepDiveView(props: DeepDiveViewProps) {
   } = props;
   const experiments = useExperiments();
   const [summaryOpenFor, setSummaryOpenFor] = useState<string | null>(null);
+  const summaryToggle = useRef<HTMLButtonElement>(null);
   const chain = ancestorChain(panels, focusId, rootLabel);
   const paneEntries = paneWindow(chain);
   // The dive this tree started from (chain[0] is the PDF itself).
@@ -117,7 +118,7 @@ export default function DeepDiveView(props: DeepDiveViewProps) {
     onPin,
   });
   const guide = experiments.guidedQuestions ? guidedRoot(panels, focusId) : null;
-  if (guide) return <GuidedDiveView {...props} guide={guide} paneProps={paneProps} diagrams={experiments.diagrams} />;
+  if (guide) return <GuidedDiveView {...props} guide={guide} paneProps={paneProps} diagrams={experiments.diagrams} treeSummary={experiments.treeSummary} />;
 
   return (
     <div className="deep-dive-view">
@@ -143,7 +144,9 @@ export default function DeepDiveView(props: DeepDiveViewProps) {
               <span className="deep-dive-tool">
                 <button
                   type="button"
+                  ref={summaryToggle}
                   className={`deep-dive-tool-button${summaryOpenFor === root.id ? " active" : ""}`}
+                  aria-expanded={summaryOpenFor === root.id}
                   onClick={() => setSummaryOpenFor((open) => (open === root.id ? null : root.id))}
                   title="A one-page summary of every dive from this passage"
                 >
@@ -165,7 +168,10 @@ export default function DeepDiveView(props: DeepDiveViewProps) {
           onSummarize={onSummarizeTree}
           job={summaryJobs[root.id]}
           onCancel={() => onCancelSummary(root.id)}
-          onClose={() => setSummaryOpenFor(null)}
+          onClose={() => {
+            setSummaryOpenFor(null);
+            summaryToggle.current?.focus({ preventScroll: true });
+          }}
         />
       ) : null}
       <div className="deep-dive-panes">

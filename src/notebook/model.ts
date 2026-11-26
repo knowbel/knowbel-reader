@@ -22,7 +22,7 @@ export interface NotebookEntry {
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
-  origin?: { kind: "ai"; context?: string; conversationId?: string; turnId?: string; sources: SourceRef[] };
+  origin?: { kind: "ai"; material?: "diveSummary"; context?: string; conversationId?: string; turnId?: string; sources: SourceRef[] };
 }
 export interface NotebookCapture {
   id: string;
@@ -67,14 +67,18 @@ export function textBody(text: string): RichNode {
     ...(i ? [{ type: "hardBreak" }] : []), ...(line ? [{ type: "text", text: line }] : []),
   ]) : undefined })) };
 }
-export function richText(node: RichNode): string {
-  if (node.type === "aiExchange") return `${node.attrs?.question ?? ""}\n${node.attrs?.editedBody ? richText(node.attrs.editedBody) : node.attrs?.answer || node.attrs?.pendingAnswer || ""}`;
+export function richText(node: RichNode, options?: { omitDiveSummaries?: boolean }): string {
+  if (options?.omitDiveSummaries && node.type === "contribution") {
+    const origin = node.attrs?.origin;
+    if (origin?.material === "diveSummary" || origin?.context?.startsWith("Dive summary · ")) return "";
+  }
+  if (node.type === "aiExchange") return `${node.attrs?.question ?? ""}\n${node.attrs?.editedBody ? richText(node.attrs.editedBody, options) : node.attrs?.answer || node.attrs?.pendingAnswer || ""}`;
   if (node.type === "inlineMath" || node.type === "blockMath") return node.attrs?.latex ?? "";
   if (node.type === "hardBreak") return "\n";
   if (node.type === "image") return node.attrs?.alt ?? "";
   if (node.text !== undefined) return node.text;
   const separator = ["doc", "blockquote", "bulletList", "orderedList", "listItem", "table", "tableRow"].includes(node.type) ? "\n" : "";
-  return (node.content ?? []).map(richText).join(separator);
+  return (node.content ?? []).map((child) => richText(child, options)).join(separator);
 }
 export function richMarkdown(node: RichNode, assetPath: (id: string) => string = (id) => `assets/${id}`): string {
   if (node.text !== undefined) {

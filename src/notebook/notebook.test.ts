@@ -195,6 +195,56 @@ test('combining AI and personal writing keeps block provenance and stable source
   assert.ok(richMarkdown(body).includes('AI-assisted')); await store.flush();
 });
 
+test('a dive summary is saved once within the current owner of its passage and survives reopening', async () => {
+  const storage = createMemoryStorage(), store = new NotebookStore(storage);
+  await store.load(DOC, { highlights: [highlight()] });
+  const captureId = 'pdf:h1';
+  const passageId = store.entryForCapture(captureId)!.id;
+  const noteId = store.addNote('document', undefined, textBody('Another thought'));
+  store.combine([passageId, noteId]);
+  const owner = store.entryForCapture(captureId)!;
+  const source = { label: 'S1', pageNumber: 2, start: 0, end: 5, text: 'Original evidence' };
+  const origin = { kind: 'ai' as const, conversationId: 'dive', sources: [source] };
+  const summary = textBody('A cited study summary');
+  assert.deepEqual(store.addDiveSummary(captureId, 'A cited study summary', summary, origin), { id: owner.id, added: true });
+  assert.deepEqual(store.addDiveSummary(captureId, 'A cited study summary', summary, origin), { id: owner.id, added: false });
+  assert.equal(store.getSnapshot().entries.filter((entry) => !entry.deletedAt).length, 1);
+  await store.flush();
+
+  const reopened = new NotebookStore(storage);
+  await reopened.load(DOC, { notebook: await storage.getData(DOC, 'notebook') });
+  const entry = reopened.entryForCapture(captureId)!;
+  assert.equal(entry.id, owner.id);
+  assert.deepEqual(entry.captureIds, [captureId]);
+  assert.equal(entry.origin, undefined);
+  assert.match(reopened.plain(entry), /My thought\nAnother thought\nA cited study summary/);
+  assert.equal(richText(entry.body, { omitDiveSummaries: true }).trim(), 'My thought\nAnother thought');
+  assert.deepEqual(entry.body.content?.find((node) => node.type === 'contribution')?.attrs?.origin,
+    { ...origin, material: 'diveSummary' });
+});
+
+test('re-saving a prior standalone dive summary moves it under its passage and preserves edits', async () => {
+  const store = new NotebookStore(createMemoryStorage());
+  await store.load(DOC, { highlights: [highlight()] });
+  const origin = { kind: 'ai' as const, context: 'Dive summary · A selected passage', conversationId: 'dive', sources: [] };
+  const original = textBody('A study summary');
+  const previousId = store.addExcerpt('A study summary', origin, original);
+  const previous = store.getEntry(previousId)!;
+  const contribution = previous.body.content![0];
+  store.updateBody(previousId, { ...previous.body, content: [textBody('My introduction').content![0],
+    { ...contribution, content: textBody('An edited study summary').content }, ...previous.body.content!.slice(1)] });
+
+  const result = store.addDiveSummary('pdf:h1', 'A study summary', original, origin);
+  assert.equal(result?.id, captureEntryId('pdf:h1'));
+  assert.ok(store.getEntry(previousId)?.deletedAt);
+  assert.match(store.plain(store.getEntry(result!.id)), /My thought\nMy introduction\nAn edited study summary/);
+  assert.equal(store.addDiveSummary('pdf:h1', 'A study summary', original, origin)?.added, false);
+  store.undo();
+  assert.equal(store.getEntry(previousId)?.deletedAt, undefined);
+  assert.equal(store.plain(store.getEntry(result!.id)), 'My thought');
+  await store.flush();
+});
+
 test('finishing a blank note removes it, while images, tables, and unanswered questions remain', async () => {
   const store = new NotebookStore(createMemoryStorage()); await store.load(DOC, {});
   const blank = store.addNote(); store.finishEntry(blank); assert.equal(store.getEntry(blank), undefined);

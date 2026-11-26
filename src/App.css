@@ -1096,6 +1096,14 @@
   word-break: break-word;
 }
 
+.highlight-comment-tooltip .answer-markdown {
+  white-space: normal;
+}
+
+.highlight-comment-tooltip .answer-markdown p {
+  margin: 0;
+}
+
 .quick-note-input {
   flex: 1;
   min-width: 0;
@@ -4863,16 +4871,30 @@
   min-width: 0;
 }
 
-.tree-summary-kicker {
-  color: var(--muted);
-  font-size: 0.68rem;
+.tree-summary-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+}
+
+.tree-summary-heading {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.95rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+}
+
+.tree-summary-location {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .tree-summary-passage {
   overflow: hidden;
+  color: var(--muted);
+  font-size: 0.84rem;
   font-style: italic;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4882,12 +4904,37 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.6rem 1.25rem;
+  border-top: 1px solid var(--border-soft);
+}
+
+.tree-summary-progress {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.tree-summary-save {
+  margin-inline-start: auto;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--link-tint);
+  color: var(--link);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tree-summary-save:hover {
+  border-color: var(--link);
 }
 
 .tree-summary-close {
   display: inline-flex;
-  padding: 0.15rem;
+  padding: 0.35rem;
   border: 0;
   border-radius: 4px;
   background: none;

@@ -2,9 +2,10 @@ import { citedSources } from "../grounding/citations.ts";
 import { labelSources } from "../grounding/context.ts";
 import { renderSources } from "../grounding/prompt.ts";
 import type { SourceRef } from "../grounding/types.ts";
+import { DISCOVER_QUESTIONS, NO_GUIDE_ORIENTATION } from "./guided.ts";
 import { openingMessage } from "./prompts.ts";
 import { treeOf } from "./tree.ts";
-import type { DivePanel } from "./types.ts";
+import type { DivePanel, DiveTurn } from "./types.ts";
 
 // A one-page summary of everything explored from one passage (the
 // treeSummary experiment): the questions asked across the whole dive tree,
@@ -20,6 +21,14 @@ const sourceKey = (source: SourceRef) => source.chunkId ?? `${source.pageNumber}
 
 // [S3] · [S3, S7] · [inferred: S3] — as in grounding/citations.ts.
 const MARKER = /\[\s*(inferred\s*:?\s*)?(S\d+(?:\s*,\s*S\d+)*)\s*\]/gi;
+
+function isCompletedAnswer(turn: DiveTurn): boolean {
+  return turn.role === "assistant" && !turn.status && Boolean(turn.content.trim()) && !turn.content.startsWith("⚠️");
+}
+
+function isDiscoveryQuestion(panel: DivePanel, turn?: DiveTurn): boolean {
+  return panel.guided === "guide" && turn?.role === "user" && turn.content === DISCOVER_QUESTIONS;
+}
 
 // An answer's markers rewritten from its own request's ids to the shared
 // ones; ids with no shared counterpart are dropped.
@@ -40,7 +49,8 @@ function relabel(text: string, own: SourceRef[], shared: Map<string, string>): s
 // date.
 export function treeAnswerCount(panels: DivePanel[], rootId: string): number {
   return treeOf(panels, rootId).reduce(
-    (sum, { panel }) => sum + panel.turns.filter((turn) => turn.role === "assistant" && !turn.status && !turn.content.startsWith("⚠️")).length,
+    (sum, { panel }) => sum + panel.turns.filter((turn, index) =>
+      isCompletedAnswer(turn) && !isDiscoveryQuestion(panel, panel.turns[index - 1])).length,
     0,
   );
 }
@@ -70,7 +80,7 @@ export function buildTreeSummaryRequest(params: {
   const collected = new Map<string, SourceRef>();
   for (const { panel } of tree) {
     for (const turn of panel.turns) {
-      if (turn.role !== "assistant" || turn.status || !turn.sources) continue;
+      if (!isCompletedAnswer(turn) || !turn.sources) continue;
       for (const source of citedSources(turn.content, turn.sources)) {
         if (collected.size >= MAX_SOURCES) break;
         if (!collected.has(sourceKey(source))) collected.set(sourceKey(source), source);
@@ -90,14 +100,17 @@ export function buildTreeSummaryRequest(params: {
     panel.turns.forEach((turn, index) => {
       if (turn.role === "user") {
         const answer = panel.turns[index + 1];
-        if (!answer || answer.role !== "assistant" || answer.status || answer.content.startsWith("⚠️")) return;
+        if (!answer || !isCompletedAnswer(answer) || isDiscoveryQuestion(panel, turn)) return;
         if (index === 0 && turn.content === openingMessage(panel.selection)) return;
         lines.push(`Reader: ${turn.content}`);
-      } else if (!turn.status && !turn.content.startsWith("⚠️")) {
+      } else if (isCompletedAnswer(turn)) {
+        const orientation = isDiscoveryQuestion(panel, panel.turns[index - 1]);
+        if (orientation && turn.content === NO_GUIDE_ORIENTATION) return;
         const text = relabel(turn.content, turn.sources ?? [], shared);
-        lines.push(`Answer: ${text.length > ANSWER_CHARS ? `${text.slice(0, ANSWER_CHARS)}…` : text}`);
+        lines.push(`${orientation ? "Passage orientation" : "Answer"}: ${text.length > ANSWER_CHARS ? `${text.slice(0, ANSWER_CHARS)}…` : text}`);
       }
     });
+    if (root?.guided === "guide" && depth > 0 && lines.length === 1) continue;
     const block = lines.join("\n\n");
     if (length + block.length > TRANSCRIPT_CHARS) {
       parts.push("Some later branches were omitted because the exploration is long. Summarize only the material included here.");
@@ -144,7 +157,7 @@ Length: at most a page (about 350 words), and shorter when the dive was short.
 
 After each claim taken from a source, cite it by id: [S2]. For something reasoned from the sources: [inferred: S2]. For outside knowledge: [general]. Never cite an id that isn't listed below.
 
-Use KaTeX math. Reconstruct a formula only when its notation is clear from the sources; otherwise acknowledge the uncertainty.
+Use $...$ for inline KaTeX math, including in headings and bold questions, and $$...$$ for display equations. Reconstruct a formula only when its notation is clear from the sources; otherwise acknowledge the uncertainty.
 
 Sources from the document:
 ${renderSources(sources, params.pageLabel)}`;

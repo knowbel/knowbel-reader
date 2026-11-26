@@ -25,8 +25,12 @@ import {
   stickerStyle,
 } from "../stickerStyles";
 
+type HighlightPreviewTarget = Pick<CommentedHighlight, "id" | "divePanelId">;
+export type HighlightPreviewRenderer = (highlight: HighlightPreviewTarget) => ReactNode;
+
 interface HighlightContainerProps {
   onOpenNote: (id: string) => void;
+  renderHoverPreview: HighlightPreviewRenderer;
   editHighlight: (
     idToUpdate: string,
     edit: Partial<CommentedHighlight>,
@@ -70,6 +74,7 @@ function GlossaryFlash() {
 
 function AnnotationHighlight({
   onOpenNote,
+  renderHoverPreview,
   editHighlight,
   deleteHighlight,
   notesCollapsed,
@@ -142,8 +147,8 @@ function AnnotationHighlight({
     return true;
   };
 
-  const commentTip = highlight.comment ? (
-    <div className="highlight-comment-tooltip">{highlight.comment}</div>
+  const preview = highlight.divePanelId || highlight.comment ? (
+    <HighlightHoverPreview highlight={highlight} render={renderHoverPreview} />
   ) : null;
 
   // Tags the highlight's DOM with its id so the annotations panel can
@@ -156,10 +161,10 @@ function AnnotationHighlight({
     </div>
   );
 
-  const withCommentTip = (element: ReactNode) =>
-    commentTip ? (
+  const withHoverPreview = (element: ReactNode) =>
+    preview ? (
       <MonitoredHighlightContainer
-        highlightTip={{ position: highlight.position, content: commentTip }}
+        highlightTip={{ position: highlight.position, content: preview }}
       >
         {element}
       </MonitoredHighlightContainer>
@@ -168,7 +173,7 @@ function AnnotationHighlight({
     );
 
   if (highlight.type === "text") {
-    return anchor(withCommentTip(
+    return anchor(withHoverPreview(
       <TextHighlight
         highlight={highlight}
         isScrolledTo={isScrolledTo}
@@ -267,7 +272,7 @@ function AnnotationHighlight({
     );
   }
 
-  return anchor(withCommentTip(
+  return anchor(withHoverPreview(
     <AreaHighlight
       highlight={highlight}
       isScrolledTo={isScrolledTo}
@@ -292,4 +297,11 @@ function AnnotationHighlight({
       shouldSelect={shouldSelect}
     />,
   ));
+}
+
+// The PDF library mounts this content on hover, so it can read a completed
+// orientation even if the page's highlight layer has not re-rendered.
+function HighlightHoverPreview({ highlight, render }: { highlight: HighlightPreviewTarget; render: HighlightPreviewRenderer }) {
+  const content = render(highlight);
+  return content ? <div className="highlight-comment-tooltip">{content}</div> : null;
 }

@@ -57,6 +57,14 @@ export function readGuideOrientation(raw: string): string {
   return text.length <= 420 ? text.replace(/\s*\n\s*/g, " ") : "";
 }
 
+export function guideDiscovery(panel: DivePanel) {
+  const index = panel.turns.findLastIndex((turn, i) =>
+    turn.role === "assistant" && panel.turns[i - 1]?.content === DISCOVER_QUESTIONS);
+  const reply = panel.turns[index];
+  const orientation = reply && !reply.status && reply.content !== NO_GUIDE_ORIENTATION && !reply.content.startsWith("⚠️") ? reply.content : "";
+  return { index, reply, orientation };
+}
+
 export function forDiveRequest(panel: DivePanel, content: string): DivePanel {
   // A saved guide can still be read through the classic view when the
   // experiment is off. Only the discovery request uses the guide prompt.

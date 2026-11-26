@@ -1,5 +1,5 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, BookOpen, ChevronRight, Ellipsis, PanelRightOpen, Paperclip } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronRight, Ellipsis, FileText, PanelRightOpen, Paperclip } from "lucide-react";
 import MathRun from "../document/MathRun";
 import AnswerMarkdown from "../grounding/AnswerMarkdown";
 import AttachmentChips from "../grounding/AttachmentChips";
@@ -11,8 +11,10 @@ import { useReaderDraft } from "../notebook/drafts";
 import type { DeepDiveViewProps } from "./DeepDiveView";
 import DivePanelPane, { InlineDiveAnswer, type DivePanelPaneProps } from "./DivePanelPane";
 import InlineDiveMath from "./InlineDiveMath";
+import TreeSummaryPanel from "./TreeSummaryPanel";
 import { splitDiagram } from "./diagram";
-import { DISCOVER_QUESTIONS, guidedShortAnswer, NO_GUIDE_ORIENTATION, questionAnswer, readGuideOrientation, SIMPLIFY_ANSWER, type GuidedQuestionRequest } from "./guided";
+import { DISCOVER_QUESTIONS, guideDiscovery, guidedShortAnswer, questionAnswer, readGuideOrientation, SIMPLIFY_ANSWER, type GuidedQuestionRequest } from "./guided";
+import { treeAnswerCount } from "./summary";
 import { childrenOf, panelById } from "./tree";
 import type { DiveHighlight, DiveHighlightPlacement, DiveJobState, DivePanel, DiveTurnRequest } from "./types";
 import "./guidedDive.css";
@@ -21,16 +23,19 @@ type GuidedViewProps = DeepDiveViewProps & {
   guide: DivePanel;
   paneProps: (id: string) => DivePanelPaneProps;
   diagrams: boolean;
+  treeSummary: boolean;
 };
 type CreateQuestion = GuidedViewProps["onCreateGuidedQuestion"];
 
 export default function GuidedDiveView({
   guide, focusId, turnRequest, panels, jobs, paneProps, scrollPositions, rootSlotRef, onFocusChange,
   onCreateGuidedQuestion, onJumpToSource, onReturnToPassage, diagrams,
+  treeSummary, summaryJobs, onSummarizeTree, onCancelSummary, pageLabel,
 }: GuidedViewProps) {
   const focused = focusId === guide.id ? null : panelById(panels, focusId);
   const focusedId = focused?.id;
   const [sourceVisible, setSourceVisible] = useState(false);
+  const [summaryOpenFor, setSummaryOpenFor] = useState<string | null>(null);
   const [originalAnswers, setOriginalAnswers] = useState<Record<string, boolean>>({});
   const selectOriginal = useCallback((id: string, original: boolean) => {
     setOriginalAnswers((answers) => Boolean(answers[id]) === original ? answers : { ...answers, [id]: original });
@@ -38,9 +43,17 @@ export default function GuidedDiveView({
   const overviewRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const sourceToggle = useRef<HTMLButtonElement>(null);
+  const summaryToggle = useRef<HTMLButtonElement>(null);
   const openerRef = useRef<HTMLButtonElement | null>(null);
   const overviewKey = "questions:" + guide.id;
   const overview = paneProps(guide.id);
+  const summaryJob = summaryJobs[guide.id];
+  const canSummarize = treeSummary && (guide.summary || summaryJob || treeAnswerCount(panels, guide.id) > 0);
+  const summaryOpen = summaryOpenFor === guide.id;
+  const closeSummary = () => {
+    setSummaryOpenFor(null);
+    summaryToggle.current?.focus({ preventScroll: true });
+  };
   const revealSource = (navigate: () => void) => {
     setSourceVisible(true);
     requestAnimationFrame(() => {
@@ -75,16 +88,26 @@ export default function GuidedDiveView({
   return (
     <div className="deep-dive-view guided-dive">
       <nav className="guided-navigation" aria-label="Deep Dive">
-        <button type="button" className="guided-action" onClick={() => onFocusChange(null)}>
-          <ArrowLeft size={15} aria-hidden /> Back to reading
+        <button type="button" className="guided-action guided-back" aria-label="Back to reading" title="Back to reading" onClick={() => onFocusChange(null)}>
+          <ArrowLeft size={15} aria-hidden /><span>Back to reading</span>
         </button>
-        <span>Deep Dive</span>
-        <button type="button" ref={sourceToggle} className="guided-action guided-source-toggle" aria-pressed={sourceVisible} onClick={() => {
-          if (!sourceVisible && focused && showOriginal) showOriginal();
-          else setSourceVisible(!sourceVisible);
-        }}>
-          {sourceVisible ? (focused ? "Back to thread" : "Back to questions") : focused && showOriginal ? "Original passage" : "Source"}
-        </button>
+        <span className="guided-navigation-title">Deep Dive</span>
+        <div className="guided-navigation-actions">
+          {canSummarize ? (
+            <button type="button" ref={summaryToggle} className="guided-action guided-summary-toggle"
+              aria-expanded={summaryOpen} aria-haspopup="dialog"
+              onClick={() => setSummaryOpenFor(summaryOpen ? null : guide.id)}>
+              <FileText size={15} aria-hidden /> {guide.summary ? "View dive summary" : "Summarize dive"}
+            </button>
+          ) : null}
+          <button type="button" ref={sourceToggle} className="guided-action guided-source-toggle" aria-pressed={sourceVisible} onClick={() => {
+            setSummaryOpenFor(null);
+            if (!sourceVisible && focused && showOriginal) showOriginal();
+            else setSourceVisible(!sourceVisible);
+          }}>
+            {sourceVisible ? (focused ? "Back to thread" : "Back to questions") : focused && showOriginal ? "Original passage" : "Source"}
+          </button>
+        </div>
       </nav>
       <div className={"guided-layout" + (focused ? " has-thread" : "") + (sourceVisible ? " showing-source" : "")}>
         <div className="guided-document"><div className="pdf-pane-slot" ref={rootSlotRef} /></div>
@@ -112,6 +135,11 @@ export default function GuidedDiveView({
               showOriginal={Boolean(originalAnswers[focused.id])} selectOriginal={selectOriginal}
               onJumpToSource={jump} diagrams={diagrams} turnRequest={turnRequest?.panelId === focused.id ? turnRequest : undefined} />
           </section>
+        ) : null}
+        {canSummarize && summaryOpen ? (
+          <TreeSummaryPanel key={guide.id} root={guide} panels={panels} pageLabel={pageLabel}
+            onJumpToSource={(source) => { closeSummary(); jump(source); }}
+            onSummarize={onSummarizeTree} job={summaryJob} onCancel={() => onCancelSummary(guide.id)} onClose={closeSummary} />
         ) : null}
       </div>
     </div>
@@ -203,11 +231,8 @@ function GuidedOverview({ panel, allPanels, job, attachments, onAddToQuestion, o
   const [selected, setSelected] = useState<string[]>([]);
   const customRef = useRef<HTMLInputElement>(null);
   const children = childrenOf(allPanels, panel.id);
-  const discoveryIndex = panel.turns.findLastIndex((turn, index) =>
-    turn.role === "assistant" && panel.turns[index - 1]?.content === DISCOVER_QUESTIONS);
-  const latest = panel.turns[discoveryIndex];
-  const orientation = job ? readGuideOrientation(job.text) :
-    latest && !latest.status && latest.content !== NO_GUIDE_ORIENTATION ? latest.content : "";
+  const { index: discoveryIndex, reply: latest, orientation: savedOrientation } = guideDiscovery(panel);
+  const orientation = job ? readGuideOrientation(job.text) : savedOrientation;
   const asked = new Set(children.map((child) => child.selection.trim().toLowerCase()));
   const suggestions = (latest?.suggestions ?? []).map((suggestion) => suggestion.text).filter((question) => !asked.has(question.toLowerCase()));
   const questions = [...new Set([...suggestions.filter((question) => selected.includes(question)), draft.trim()].filter(Boolean))];

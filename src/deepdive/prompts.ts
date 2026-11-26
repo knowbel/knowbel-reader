@@ -136,7 +136,7 @@ One or two short sentences about what the selection is doing or how it connects 
 <next>
 ask: a concrete question in the reader's words?
 </next>
-The orientation is optional. Give the reader a foothold by describing what the author is trying to show, what changed from the preceding text, or which earlier idea the selection builds on. Use only the selection, image and supplied excerpts. Omit the orientation if it would just restate the quote or if the connection is unclear. Keep it to one short paragraph, with inline math only. Cite a supporting excerpt with its supplied marker, such as [S1], when explaining a connection from the surrounding text.
+The orientation is optional. Give the reader a foothold by describing what the author is trying to show, what changed from the preceding text, or which earlier idea the selection builds on. Use only the selection, image and supplied excerpts. Omit the orientation if it would just restate the quote or if the connection is unclear. Keep it to one short paragraph and write mathematics as inline $...$ KaTeX. Cite a supporting excerpt with its supplied marker, such as [S1], when explaining a connection from the surrounding text.
 Use up to three distinct ask lines, strongest first, each under 90 visible characters. Name the specific idea, step or visible feature. Omit weak or repetitive questions. If the selection is ambiguous, offer a question the available context can help answer. Don't answer the questions yet. ${QUESTION_MATH}`,
       suffix: "",
     };

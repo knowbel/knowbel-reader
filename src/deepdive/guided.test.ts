@@ -8,7 +8,7 @@ import { unified } from "unified";
 import { rehypeAnnotate } from "./annotate.ts";
 import { buildDivePrompt } from "./prompts.ts";
 import { appendTurn, createRootPanel } from "./tree.ts";
-import { createGuidedQuestion, DISCOVER_QUESTIONS, EXPLANATION_SEPARATOR, forDiveRequest, guidedReply, guidedRoot, guidedShortAnswer, NO_GUIDE_ORIENTATION, questionAnswer, readGuideOrientation, streamingGuidedAnswer } from "./guided.ts";
+import { createGuidedQuestion, DISCOVER_QUESTIONS, EXPLANATION_SEPARATOR, forDiveRequest, guideDiscovery, guidedReply, guidedRoot, guidedShortAnswer, NO_GUIDE_ORIENTATION, questionAnswer, readGuideOrientation, streamingGuidedAnswer } from "./guided.ts";
 import { inlineMathParts, normalizeMathNotation } from "./mathNotation.ts";
 import type { DivePanel } from "./types.ts";
 import type { SourceRef } from "../grounding/types.ts";
@@ -47,6 +47,14 @@ test("the same discovery reply can carry a brief grounded orientation and sugges
   assert.equal(reply.suggestions[0]?.text, "Why did the deaths peak later?");
   assert.equal(guidedReply(guide, questions).body, NO_GUIDE_ORIENTATION);
   assert.equal(guidedReply(guide, "<orientation>" + "A".repeat(421) + "</orientation>\n" + questions).body, NO_GUIDE_ORIENTATION);
+
+  const discovery = appendTurn(guide, "user", DISCOVER_QUESTIONS);
+  const saved = appendTurn(discovery, "assistant", reply.body, { sources: [source] });
+  const followedUp = appendTurn(appendTurn(saved, "user", "What about temperature?"), "assistant", "A separate answer.");
+  assert.equal(guideDiscovery(followedUp).orientation, orientation);
+  assert.deepEqual(guideDiscovery(followedUp).reply?.sources, [source]);
+  assert.equal(guideDiscovery(appendTurn(discovery, "assistant", NO_GUIDE_ORIENTATION)).orientation, "");
+  assert.equal(guideDiscovery(appendTurn(discovery, "assistant", "Failed", { status: "error" })).orientation, "");
 });
 
 test("a recursive reply is grounded in the original passage and the visible parent answer", () => {

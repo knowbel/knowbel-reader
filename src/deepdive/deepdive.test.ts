@@ -5,6 +5,7 @@ import { GROUNDING_RULES, MATH_RULES, renderSources } from "../grounding/prompt.
 import type { SourceRef } from "../grounding/types.ts";
 import { splitDiagram } from "./diagram.ts";
 import { DEFAULT_EXPERIMENTS, EXPERIMENT_GROUPS, parseExperiments } from "./experiments.ts";
+import { DISCOVER_QUESTIONS, NO_GUIDE_ORIENTATION } from "./guided.ts";
 import { buildDivePrompt, buildDiveSystem } from "./prompts.ts";
 import { readerNotesBlock } from "./readerNotes.ts";
 import { hideSuggestionBlock, mergeSuggestions, splitSuggestions, suggestedDiveSources } from "./suggestions.ts";
@@ -327,4 +328,28 @@ test("the tree summary renumbers every answer's citations into one shared list",
   assert.match(system, /Entanglement links two qubits/);
   assert.match(system, /<source id="S3" p="8">/);
   assert.equal(treeAnswerCount(panels, "r"), 2);
+});
+
+test("a guided summary covers sibling questions and nested follow-ups after the first answer", () => {
+  const root = panel("r", null, "Entanglement links two qubits", [
+    turn("user", DISCOVER_QUESTIONS),
+    turn("assistant", NO_GUIDE_ORIENTATION),
+  ], { guided: "guide" });
+  const pending = panel("p", "r", "A question awaiting an answer?", [turn("user", "A question awaiting an answer?")], { guided: "question" });
+  assert.equal(treeAnswerCount([root, pending], "r"), 0);
+
+  const answered = (id: string, parentId: string, question: string, answer: string) =>
+    panel(id, parentId, question, [turn("user", question), turn("assistant", answer)], { guided: "question" });
+  const panels = [root, pending,
+    answered("a", "r", "What is a Bell state?", "A maximally entangled state."),
+    answered("b", "r", "What is measured?", "One qubit."),
+    answered("aa", "a", "How many Bell states exist?", "There are four."),
+  ];
+  const { prompt } = buildTreeSummaryRequest({ fileName: "book.pdf", panels, rootId: root.id, pageLabel });
+  assert.equal(treeAnswerCount(panels, root.id), 3);
+  assert.match(prompt, /A maximally entangled state\./);
+  assert.match(prompt, /One qubit\./);
+  assert.match(prompt, /There are four\./);
+  assert.ok(!prompt.includes(DISCOVER_QUESTIONS) && !prompt.includes(NO_GUIDE_ORIENTATION));
+  assert.ok(!prompt.includes(pending.selection));
 });

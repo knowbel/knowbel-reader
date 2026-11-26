@@ -12,7 +12,7 @@ import {
 } from "react-pdf-highlighter-plus";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import ExpandableTip, { type GlossaryTipBindings } from "../components/ExpandableTip";
-import HighlightContainer from "../components/HighlightContainer";
+import HighlightContainer, { type HighlightPreviewRenderer } from "../components/HighlightContainer";
 import type { CommentedHighlight } from "../types";
 import pdfWorkerUrl from "../pdfWorker";
 import { extractPageContext } from "./pdfContext";
@@ -81,6 +81,7 @@ export interface PdfPaneProps {
   }) => void;
   onPin: (selection: string, contextText: string, origin?: Partial<NotebookCapture>) => void;
   onOpenNote: (id: string) => void;
+  renderHighlightHoverPreview: HighlightPreviewRenderer;
   // Text or an area (fresh selection or existing highlight) added to the
   // next question.
   onAddToQuestion: (content: GhostHighlight["content"], position: ScaledPosition) => void;
@@ -119,6 +120,7 @@ export default function PdfPane({
   onFreetextClick,
   addHighlight,
   onOpenNote,
+  renderHighlightHoverPreview,
   editHighlight,
   deleteHighlight,
   utilsRef,
@@ -392,6 +394,7 @@ export default function PdfPane({
               >
                 <HighlightContainer
                   onOpenNote={onOpenNote}
+                  renderHoverPreview={renderHighlightHoverPreview}
                   editHighlight={editHighlight}
                   deleteHighlight={deleteHighlight}
                   notesCollapsed={notesCollapsed}
